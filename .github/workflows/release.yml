@@ -11,7 +11,36 @@ permissions:
   contents: write
 
 jobs:
+  # One draft release up front: parallel build jobs cannot see each other's
+  # drafts and would otherwise each create their own.
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      id: ${{ steps.create.outputs.id }}
+    steps:
+      - id: create
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || format('build-{0}', github.run_number) }}
+          NAME: YAD ${{ github.ref_type == 'tag' && github.ref_name || format('(manual build {0})', github.run_number) }}
+        run: |
+          cat > notes.md <<'NOTES'
+          ## Downloads
+          - **macOS**: `.dmg` — `aarch64` for Apple Silicon, `x64` for Intel
+          - **Linux**: `.AppImage`, `.deb` or `.rpm`
+          - **Windows**: `.msi` or `-setup.exe`
+
+          > The macOS build is not notarized yet. After copying YAD to
+          > Applications, run once:
+          > `xattr -dr com.apple.quarantine /Applications/YAD.app`
+          NOTES
+          id=$(gh api -X POST "repos/${{ github.repository }}/releases" \
+            -f tag_name="$TAG" -f target_commitish="${{ github.sha }}" -f name="$NAME" \
+            -F draft=true -F body=@notes.md --jq .id)
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: create-release
     strategy:
       fail-fast: false
       matrix:
@@ -65,17 +94,5 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('v__VERSION__-{0}', github.run_number) }}
-          releaseName: YAD ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__ (manual build)' }}
-          releaseDraft: true
-          prerelease: false
+          releaseId: ${{ needs.create-release.outputs.id }}
           args: ${{ matrix.args }}
-          releaseBody: |
-            ## Downloads
-            - **macOS**: `.dmg` — `aarch64` for Apple Silicon, `x64` for Intel
-            - **Linux**: `.AppImage`, `.deb` or `.rpm`
-            - **Windows**: `.msi` or `-setup.exe`
-
-            > The macOS build is not notarized yet. After copying yad to
-            > Applications, run once:
-            > `xattr -dr com.apple.quarantine /Applications/YAD.app`
