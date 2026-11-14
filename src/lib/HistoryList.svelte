@@ -11,7 +11,6 @@
 
 {#if ops.length}
   <div class="history">
-    <div class="title">History <span class="muted">· {ops.length}</span></div>
     <div class="items">
       {#each [...ops].reverse() as op (op.id)}
         <div class="row">
@@ -27,9 +26,7 @@
 {/if}
 
 <style>
-  .history { flex: none; max-height: 30%; display: flex; flex-direction: column; border-top: 1px solid var(--border); font-size: 12px; min-height: 0; }
-  .title { padding: 6px 10px; font-weight: 600; }
-  .muted { color: var(--muted); font-weight: 400; }
+  .history { flex: 1; display: flex; flex-direction: column; font-size: 12px; min-height: 0; }
   .items { overflow-y: auto; min-height: 0; padding-bottom: 6px; }
   .row { display: flex; align-items: center; gap: 6px; padding: 3px 10px; }
   .row:hover { background: var(--hover); }

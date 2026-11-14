@@ -9,10 +9,14 @@
   import ResourceList from "./lib/ResourceList.svelte";
   import FileList from "./lib/FileList.svelte";
   import HistoryList from "./lib/HistoryList.svelte";
+  import Section from "./lib/Section.svelte";
+  import Splitter from "./lib/Splitter.svelte";
   import {
     readText, writeText, initialPaths, baseName, pathKind, listFiles, joinPath, type Side,
   } from "./lib/files";
-  import { isDirty, minimalEdit, otherSide, statusOf, type Buf, type Entry, type Marker, type Op } from "./lib/workspace";
+  import {
+    decodeText, encodeText, isDirty, minimalEdit, otherSide, statusOf, storeEditorText, type Buf, type Entry, type Marker, type Op,
+  } from "./lib/workspace";
   import {
     applyEdits, compareTexts, defaultOptions, formatPath, locatePath, planApply, planRevert, planSemanticEdit, renderNormalized, shortPath,
     type ApplyItem, type Change, type CompareResult, type Direction, type NormalizedView,
@@ -26,6 +30,27 @@
   let raw: DiffView;
   let sem: DiffView;
   let work: HTMLElement;
+  let fileList: FileList | undefined = $state();
+
+  // ---- side panel layout (sizes and collapsed sections are remembered) -----
+  type PaneId = "files" | "changes" | "history";
+  type Layout = { width: number; files: number; history: number; collapsed: Record<PaneId, boolean> };
+  const LAYOUT_KEY = "yad.layout";
+  const defaultLayout: Layout = { width: 320, files: 260, history: 160, collapsed: { files: false, changes: false, history: false } };
+  function loadLayout(): Layout {
+    try {
+      const v = JSON.parse(localStorage.getItem(LAYOUT_KEY) ?? "null");
+      if (v) return { ...defaultLayout, ...v, collapsed: { ...defaultLayout.collapsed, ...v.collapsed } };
+    } catch {}
+    return structuredClone(defaultLayout);
+  }
+  let layout = $state<Layout>(loadLayout());
+  $effect(() => {
+    const snapshot = JSON.stringify(layout);
+    try { localStorage.setItem(LAYOUT_KEY, snapshot); } catch {}
+  });
+  const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+  const toggle = (id: PaneId) => (layout.collapsed[id] = !layout.collapsed[id]);
 
   // ---- workspace: two files, or two directories with many file pairs --------
   let sources = $state<Record<Side, Source | null>>({ a: null, b: null });
@@ -138,8 +163,8 @@
   }
 
   async function loadFile(side: Side, path: string) {
-    const text = await readText(path);
-    const buf: Buf = { path, saved: text, text, exists: true };
+    const { text, eol, bom } = decodeText(await readText(path));
+    const buf: Buf = { path, saved: text, text, exists: true, eol, bom };
     const e = entries.length === 1 && entries[0].rel === "" ? entries[0] : { rel: "", status: "equal" as const };
     e[side] = buf;
     e.status = statusOf(e);
@@ -156,10 +181,10 @@
       byRel.set(e.rel, e);
     }
     rels.forEach((rel, i) => {
-      const text = texts[i];
-      if (text === null) return;
+      if (texts[i] === null) return;
+      const { text, eol, bom } = decodeText(texts[i]!);
       const e = byRel.get(rel) ?? { rel, status: "equal" };
-      e[side] = { path: joinPath(root, rel), saved: text, text, exists: true };
+      e[side] = { path: joinPath(root, rel), saved: text, text, exists: true, eol, bom };
       byRel.set(rel, e);
     });
     entries = [...byRel.values()]
@@ -189,19 +214,14 @@
   function onRawChange(side: Side, text: string) {
     const e = entries[current];
     if (!e) return;
-    const buf = e[side];
-    if (buf) buf.text = text;
+    storeEditorText(e, side, text, sources[side]?.kind === "dir" ? sources[side]!.path : null);
     if (raw.focusedSide() === side) lastSide = side;
-    else if (text !== "" && sources[side]?.kind === "dir") {
-      // Typing into a file that exists only on the other side creates it here.
-      e[side] = { path: joinPath(sources[side]!.path, e.rel), saved: "", text, exists: false };
-    }
     schedule();
   }
 
   async function saveBuf(buf: Buf) {
     try {
-      await writeText(buf.path, buf.text);
+      await writeText(buf.path, encodeText(buf));
       buf.saved = buf.text;
       buf.exists = true;
     } catch (e) {
@@ -216,22 +236,6 @@
 
   async function saveAll() {
     for (const e of entries) for (const buf of [e.a, e.b]) if (isDirty(buf)) await saveBuf(buf!);
-  }
-
-  /** Copy a whole file over the other side (or create it there). */
-  function copyFile(i: number, dir: Direction) {
-    const e = entries[i];
-    const [s, t]: [Side, Side] = dir === "a-to-b" ? ["a", "b"] : ["b", "a"];
-    const src = e[s];
-    if (!src) return;
-    const before = e[t]?.text ?? null;
-    if (before === src.text) return;
-    record({ rel: e.rel, side: t, label: `${dir === "a-to-b" ? "→" : "←"} whole file`, before, after: src.text, anchor: 0 });
-    if (e[t]) e[t]!.text = src.text;
-    else if (sources[t]?.kind === "dir") e[t] = { path: joinPath(sources[t]!.path, e.rel), saved: "", text: src.text, exists: false };
-    else return;
-    if (i === current) raw.setDoc(t, src.text, e[t]!.path);
-    else e.status = statusOf(e);
   }
 
   // ---- applying semantic changes -------------------------------------------
@@ -496,9 +500,9 @@
     } else if (mod && e.key === "b") {
       e.preventDefault();
       sidebar = !sidebar;
-    } else if (e.altKey && mod && (e.key === "ArrowDown" || e.key === "ArrowUp") && entries.length > 1) {
+    } else if (e.altKey && mod && (e.key === "ArrowDown" || e.key === "ArrowUp") && dirMode) {
       e.preventDefault();
-      selectEntry((current + (e.key === "ArrowDown" ? 1 : entries.length - 1)) % entries.length);
+      fileList?.move(e.key === "ArrowDown" ? 1 : -1);
     } else if (e.altKey && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
       e.preventDefault();
       active().jump(e.key === "ArrowDown" ? 1 : -1);
@@ -553,13 +557,35 @@
 <main>
   <div class="body">
     {#if sidebar}
-      <aside>
+      {@const c = layout.collapsed}
+      {@const showHistory = ops.length > 0}
+      <!-- The first open pane of changes → files → history takes the free space. -->
+      {@const filler = !c.changes ? "changes" : dirMode && !c.files ? "files" : showHistory && !c.history ? "history" : null}
+      {@const paneStyle = (id: PaneId, h: number) =>
+        c[id] ? "flex: none" : filler === id ? "flex: 1 1 0; min-height: 80px" : `flex: none; height: ${h}px`}
+      <aside style="width: {layout.width}px">
         {#if dirMode}
-          <FileList {entries} {current} onselect={selectEntry} oncopy={copyFile} />
+          <Section title="Files" badge={entries.length} collapsed={c.files} ontoggle={() => toggle("files")} style={paneStyle("files", layout.files)}>
+            <FileList bind:this={fileList} {entries} {current} onselect={selectEntry} />
+          </Section>
+          {#if !c.files && !c.changes}
+            <Splitter ondrag={(d) => (layout.files = clamp(layout.files + d, 60, window.innerHeight - 200))} />
+          {/if}
         {/if}
-        <ResourceList {result} {onresource} onchange={onchangeClick} {onedit} onapply={apply} />
-        <HistoryList {ops} showFiles={dirMode} onrevert={revertOp} />
+        <Section title="Changes" badge={result ? result.resources.reduce((n, r) => n + (r.status === "equal" ? 0 : r.changes.length || 1), 0) : ""}
+          collapsed={c.changes} ontoggle={() => toggle("changes")} style={paneStyle("changes", 0)}>
+          <ResourceList {result} {onresource} onchange={onchangeClick} {onedit} onapply={apply} />
+        </Section>
+        {#if showHistory}
+          {#if !c.history && !c.changes}
+            <Splitter ondrag={(d) => (layout.history = clamp(layout.history - d, 60, window.innerHeight - 200))} />
+          {/if}
+          <Section title="History" badge={ops.length} collapsed={c.history} ontoggle={() => toggle("history")} style={paneStyle("history", layout.history)}>
+            <HistoryList {ops} showFiles={dirMode} onrevert={revertOp} />
+          </Section>
+        {/if}
       </aside>
+      <Splitter dir="col" ondrag={(d) => (layout.width = clamp(layout.width + d, 200, 700))} />
     {/if}
 
     <section class="work" bind:this={work}>
@@ -576,10 +602,10 @@
               {#if !src}
                 <i>Drop a file or folder here</i>
               {:else if dirMode}
-                <b>{entry ? entry.rel : "—"}{isDirty(buf) ? " •" : ""}{entry && !buf ? " (missing)" : ""}</b>
+                <b>{entry ? entry.rel : "—"}{isDirty(buf) ? " ✎" : ""}{entry && !buf ? " (missing)" : ""}</b>
                 <small>{src.path}</small>
               {:else}
-                <b>{baseName(src.path)}{isDirty(buf) ? " •" : ""}</b>
+                <b>{baseName(src.path)}{isDirty(buf) ? " ✎" : ""}</b>
                 <small>{src.path}</small>
               {/if}
             </span>
@@ -632,7 +658,7 @@
 <style>
   main { display: flex; flex-direction: column; height: 100vh; }
   .body { flex: 1; min-height: 0; display: flex; }
-  aside { width: 320px; flex: none; display: flex; flex-direction: column; background: var(--panel); border-right: 1px solid var(--border); min-height: 0; }
+  aside { flex: none; display: flex; flex-direction: column; background: var(--panel); border-right: 1px solid var(--border); min-height: 0; overflow: hidden; }
   .work { flex: 1; min-width: 0; display: flex; flex-direction: column; }
   .views { flex: 1; min-height: 0; display: flex; }
   .view { flex: 1; min-width: 0; display: flex; }
