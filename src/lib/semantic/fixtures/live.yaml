@@ -1,0 +1,63 @@
+apiVersion: v1
+kind: List
+items:
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      annotations:
+        deployment.kubernetes.io/revision: "7"
+        kubectl.kubernetes.io/last-applied-configuration: |
+          {"apiVersion":"apps/v1","kind":"Deployment"}
+      creationTimestamp: "2026-10-01T10:00:00Z"
+      generation: 9
+      labels:
+        app: web
+      managedFields:
+        - manager: kubectl
+          operation: Update
+      name: web
+      namespace: prod
+      resourceVersion: "123456"
+      uid: 0b9e7b3c-1111-2222-3333-444455556666
+    spec:
+      replicas: 3
+      selector:
+        matchLabels:
+          app: web
+      template:
+        metadata:
+          creationTimestamp: null
+          labels:
+            app: web
+        spec:
+          containers:
+            - image: envoyproxy/envoy:v1.31
+              name: sidecar
+            - args:
+                - --port=8080
+                - --log=json
+              env:
+                - name: DB_HOST
+                  value: postgres
+                - name: LOG_LEVEL
+                  value: debug
+              image: registry.local/web:1.5.0
+              name: web
+              ports:
+                - containerPort: 8080
+    status:
+      availableReplicas: 3
+      readyReplicas: 3
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: web
+      namespace: prod
+      uid: 9f1c0000-aaaa-bbbb-cccc-ddddeeeeffff
+    spec:
+      ports:
+        - name: http
+          port: 80
+          targetPort: 8080
+      selector:
+        app: web

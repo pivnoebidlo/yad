@@ -16,6 +16,7 @@ npm install
 npm run tauri dev      # dev mode with hot reload
 npm run tauri build    # release .app + .dmg in src-tauri/target/release/bundle/
 npm run check          # type check
+npm test               # unit tests (semantic engine)
 ```
 
 Run with files: `yad.app/Contents/MacOS/yad left.yaml right.yaml`
