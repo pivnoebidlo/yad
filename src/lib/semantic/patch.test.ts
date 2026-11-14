@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { applyEdits, compareTexts, formatPath, planApply, planRevert, type Direction } from "./index";
+import { applyEdits, compareTexts, defaultOptions, formatPath, planApply, planRevert, planSemanticEdit, renderNormalized, type Direction } from "./index";
 
 const fixture = (name: string) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8");
 
@@ -185,5 +185,46 @@ describe("planRevert", () => {
     expect(out).toContain("name: old");
     expect(out).not.toContain("name: two");
     expect(out).toContain("labels: {x: y}");
+  });
+});
+
+describe("planSemanticEdit", () => {
+  const raw = fixture("manifest.yaml");
+  const norm = () => renderNormalized(compareTexts(raw, "").resources, defaultOptions()).a;
+
+  it("carries edits of the normalized view over to the source, keeping its formatting", () => {
+    const old = norm();
+    const edited = old
+      .replace("replicas: 2", "replicas: 3")
+      .replace("            - name: LOG_LEVEL", "            - name: EXTRA\n              value: \"1\"\n            - name: LOG_LEVEL")
+      .replace("          image: envoyproxy/envoy:v1.31\n", "          image: envoyproxy/envoy:v1.32\n");
+    expect(edited).not.toBe(old);
+    const plan = planSemanticEdit(old, edited, raw);
+    expect(plan.errors).toEqual([]);
+    const out = applyEdits(raw, plan.edits);
+    expect(compareTexts(edited, out).resources.every((r) => r.status === "equal")).toBe(true);
+    expect(out).toContain("# What's in git");
+    expect(out).toContain('args: ["--port=8080", "--log=json"]');
+    expect(out).toContain("replicas: 3");
+  });
+
+  it("adds and deletes whole resources", () => {
+    const old = norm();
+    const withCm = old + "---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: extra\n";
+    const withoutService = withCm.replace(/---\n# Service web[\s\S]*?(?=---\n|$)/, "");
+    const plan = planSemanticEdit(old, withoutService, raw);
+    expect(plan.errors).toEqual([]);
+    const out = applyEdits(raw, plan.edits);
+    const st = compareTexts(withoutService, out).resources.map((r) => `${r.label}: ${r.status}`);
+    expect(st.every((s) => s.endsWith("equal"))).toBe(true);
+    expect(out).toContain("name: extra");
+    expect(out).not.toContain("kind: Service");
+  });
+
+  it("waits while the edited text does not parse", () => {
+    const old = norm();
+    const plan = planSemanticEdit(old, old.replace("replicas: 2", "replicas: [2"), raw);
+    expect(plan.edits).toEqual([]);
+    expect(plan.parseError?.line).toBeGreaterThan(0);
   });
 });

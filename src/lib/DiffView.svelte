@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Compartment, type ChangeDesc } from "@codemirror/state";
+  import { Compartment, Transaction, type ChangeDesc } from "@codemirror/state";
   import { EditorView } from "@codemirror/view";
   import { MergeView, goToNextChunk, goToPreviousChunk, type Chunk } from "@codemirror/merge";
   import { history, undo as cmUndo, redo as cmRedo } from "@codemirror/commands";
+  import { minimalEdit } from "./workspace";
   import { baseSetup, languageExt, themeExt } from "./editor";
   import { langFor, type Side } from "./files";
   import type { Direction, Edit } from "./semantic";
@@ -19,9 +20,9 @@
     arrows?: boolean;
     /** Custom handler for an arrow; without it the chunk text is copied. */
     onarrow?: (chunk: Chunk, dir: Direction) => void;
-    /** Read-only views: the user double-clicked or started typing at `pos`. */
-    onjump?: (side: Side, pos: number) => void;
     onchange?: (side: Side, text: string) => void;
+    /** The user (not the program) changed a document: typing, paste, undo… */
+    onuseredit?: (side: Side) => void;
     /** Every document change, for mapping stored positions. */
     ontx?: (side: Side, changes: ChangeDesc) => void;
     onchunks?: (count: number) => void;
@@ -29,7 +30,7 @@
     onmarker?: (id: number) => void;
   }
   let {
-    dark, collapse, readonly = false, arrows = true, onarrow, onjump, onchange, ontx, onchunks,
+    dark, collapse, readonly = false, arrows = true, onarrow, onchange, onuseredit, ontx, onchunks,
     markers = [], onmarker,
   }: Props = $props();
 
@@ -111,21 +112,6 @@
     else copyChunk(chunk, dir);
   }
 
-  /** Read-only: double-click or a typing attempt asks to jump to the source. */
-  const jumpHandlers = (side: Side) =>
-    EditorView.domEventHandlers({
-      dblclick(e, v) {
-        const pos = v.posAtCoords({ x: e.clientX, y: e.clientY });
-        if (pos != null && onjump) { onjump(side, pos); return true; }
-        return false;
-      },
-      keydown(e, v) {
-        const typing = !e.metaKey && !e.ctrlKey && !e.altKey && (e.key.length === 1 || e.key === "Enter" || e.key === "Backspace");
-        if (typing && onjump) { e.preventDefault(); onjump(side, v.state.selection.main.head); return true; }
-        return false;
-      },
-    });
-
   // ---- undo markers (✕) in the arrow column ---------------------------------
   // The column itself is rebuilt by MergeView, so markers live in an overlay
   // on top of it, positioned with the same line coordinates.
@@ -186,10 +172,10 @@
         onChange: () => changed(side),
         onUpdate: (u) => {
           if (u.docChanged) ontx?.(side, u.changes);
+          if (u.docChanged && u.transactions.some((tr) => tr.annotation(Transaction.userEvent) !== undefined)) onuseredit?.(side);
           if (u.docChanged || u.geometryChanged || u.viewportChanged) queueRender();
         },
       }),
-      readonly ? jumpHandlers(side) : [],
     ];
     mv = new MergeView({
       a: { doc: "", extensions: ext("a") },
@@ -231,6 +217,22 @@
     if (v.state.doc.toString() === text) v.dispatch({ effects });
     else v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: text }, effects });
     if (fresh) v.dispatch({ effects: comp[side].history.reconfigure(history()) });
+  }
+
+  /**
+   * Bring a side to `text` with the smallest edit, outside the undo history:
+   * the cursor stays where it was (used to refresh the semantic view while
+   * the user works in it).
+   */
+  export function setDocSoft(side: Side, text: string) {
+    const v = view(side);
+    const cur = v.state.doc.toString();
+    if (cur === text) return;
+    v.dispatch({ changes: minimalEdit(cur, text), annotations: Transaction.addToHistory.of(false) });
+  }
+
+  export function cursor(side: Side): number {
+    return view(side).state.selection.main.head;
   }
 
   export function undo(side: Side) {

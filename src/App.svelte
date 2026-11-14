@@ -14,7 +14,7 @@
   } from "./lib/files";
   import { isDirty, minimalEdit, otherSide, statusOf, type Buf, type Entry, type Marker, type Op } from "./lib/workspace";
   import {
-    applyEdits, compareTexts, defaultOptions, formatPath, locatePath, planApply, planRevert, renderNormalized, shortPath,
+    applyEdits, compareTexts, defaultOptions, formatPath, locatePath, planApply, planRevert, planSemanticEdit, renderNormalized, shortPath,
     type ApplyItem, type Change, type CompareResult, type Direction, type NormalizedView,
     type ResourceDiff, type SourceRange, type Touched,
   } from "./lib/semantic";
@@ -52,6 +52,10 @@
   let normalized = $state.raw<NormalizedView | null>(null);
   /** True while a whole document is being replaced (file switch): positions are not mapped. */
   let loading = false;
+  // Editing the semantic view: changes are carried to the source after a short pause.
+  let semTimer: ReturnType<typeof setTimeout> | undefined;
+  let semSide: Side | null = null;
+  let semError = $state<string | null>(null);
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
@@ -74,14 +78,16 @@
     if (!e) {
       result = null;
       normalized = null;
-      sem.setDoc("a", "", null);
-      sem.setDoc("b", "", null);
+      sem.setDocSoft("a", "");
+      sem.setDocSoft("b", "");
       return;
     }
     result = compareTexts(raw.getDoc("a"), raw.getDoc("b"), opts);
     normalized = renderNormalized(result.resources, opts);
-    sem.setDoc("a", normalized.a, "normalized.yaml");
-    sem.setDoc("b", normalized.b, "normalized.yaml");
+    for (const side of ["a", "b"] as const) {
+      if (semSide === side) continue; // the user is typing there, or the text does not parse yet
+      sem.setDocSoft(side, normalized[side]);
+    }
     e.status = statusOf(e, result);
   }
 
@@ -91,6 +97,7 @@
   }
 
   async function setMode(m: Mode) {
+    flushSemantic();
     if (timer) recompute();
     mode = m;
     await tick();
@@ -162,11 +169,13 @@
   }
 
   function selectEntry(i: number) {
+    flushSemantic();
     current = i;
     const e = entries[i];
     loading = true;
     for (const side of ["a", "b"] as const) raw.setDoc(side, e?.[side]?.text ?? "", e?.[side]?.path ?? e?.rel ?? null, true);
     loading = false;
+    for (const side of ["a", "b"] as const) sem.setDoc(side, "", "normalized.yaml", true);
     recompute();
   }
 
@@ -230,6 +239,7 @@
   const changeKey = (r: ResourceDiff, c?: Change) => `${r.key}|${c ? formatPath(c.path) : ""}`;
 
   async function apply(items: ApplyItem[], dir: Direction) {
+    flushSemantic();
     // Results may lag behind typing by the debounce: recompute and re-find the items.
     if (timer) {
       const wanted = new Set(items.map((it) => changeKey(it.resource, it.change)));
@@ -353,6 +363,37 @@
     if (op) revertOp(op);
   }
 
+  // ---- editing in the semantic view -------------------------------------------
+
+  function onSemanticUserEdit(side: Side) {
+    if (semSide && semSide !== side) flushSemantic();
+    semSide = side;
+    lastSide = side;
+    clearTimeout(semTimer);
+    semTimer = setTimeout(() => syncSemantic(side), 350);
+  }
+
+  function flushSemantic() {
+    if (semTimer && semSide) syncSemantic(semSide);
+  }
+
+  /** Carry what the user changed in the normalized text over to the source file. */
+  function syncSemantic(side: Side) {
+    clearTimeout(semTimer);
+    semTimer = undefined;
+    semSide = null;
+    if (!normalized || !entries[current]) return;
+    const plan = planSemanticEdit(normalized[side], sem.getDoc(side), raw.getDoc(side), opts);
+    if (plan.parseError) {
+      semError = `${side === "a" ? "Left" : "Right"}, line ${plan.parseError.line}: ${plan.parseError.message.split("\n")[0]} — not applied yet`;
+      semSide = side; // keep this side's text until it parses
+      return;
+    }
+    semError = plan.errors.length ? `Not applied: ${plan.errors.join("; ")}` : null;
+    if (plan.edits.length) raw.applyEdits(side, plan.edits);
+    recompute();
+  }
+
   /** Arrow in the semantic view: apply the changes inside that chunk. */
   function onSemanticArrow(chunk: Chunk, dir: Direction) {
     if (!result || !normalized) return;
@@ -411,8 +452,8 @@
     raw.select(sourceSpans(r, c), c.kind === "removed" ? "a" : "b");
   }
 
-  /** Double-click / typing in the read-only semantic view: go to the same place in the source. */
-  async function onSemanticJump(side: Side, pos: number) {
+  /** Show the place under the semantic cursor in the source view (Cmd+J). */
+  async function showInSource(side: Side, pos: number) {
     const hit = normalized?.pathAt(side, pos);
     const r = hit && result?.resources.find((x) => x.key === hit.key);
     const s: Side = r?.[side] ? side : otherSide(side);
@@ -432,19 +473,26 @@
       if (e.shiftKey) saveAll();
       else if (side) save(side);
       else { save("a"); save("b"); }
-    } else if (mod && e.key.toLowerCase() === "z" && !(mode === "text" && raw.focusedSide())) {
-      // Outside an editable editor (semantic view, side panel): undo where the last change went.
+    } else if (mod && e.key.toLowerCase() === "z" && !e.defaultPrevented) {
+      // Not handled by an editor (nothing to undo there, or focus in the side
+      // panel): undo in the source of the side the last change went to.
       const side = lastSide;
       if (!side) return;
+      flushSemantic();
       e.preventDefault();
       if (e.shiftKey) raw.redo(side);
       else raw.undo(side);
+    } else if (mod && e.key.toLowerCase() === "j" && mode === "semantic") {
+      e.preventDefault();
+      const side = sem.focusedSide() ?? "b";
+      flushSemantic();
+      showInSource(side, sem.cursor(side));
     } else if (mod && e.key.toLowerCase() === "o") {
       e.preventDefault();
       pick(e.shiftKey ? "b" : "a", e.altKey);
     } else if (mod && (e.key === "1" || e.key === "2")) {
       e.preventDefault();
-      setMode(e.key === "1" ? "text" : "semantic");
+      setMode(e.key === "1" ? "semantic" : "text");
     } else if (mod && e.key === "b") {
       e.preventDefault();
       sidebar = !sidebar;
@@ -546,7 +594,7 @@
             onchunks={(n) => (chunks = n)} markers={rawMarkers} {onmarker} />
         </div>
         <div class="view" class:hidden={mode !== "semantic"}>
-          <DiffView bind:this={sem} {dark} {collapse} readonly onarrow={onSemanticArrow} onjump={onSemanticJump}
+          <DiffView bind:this={sem} {dark} {collapse} onarrow={onSemanticArrow} onuseredit={onSemanticUserEdit}
             markers={semMarkers} {onmarker} />
         </div>
       </div>
@@ -556,18 +604,22 @@
   <footer>
     <button class="toggle" class:on={sidebar} onclick={() => (sidebar = !sidebar)} title="Toggle side panel (⌘B)">☰</button>
     <div class="segmented" role="tablist">
-      <button class:on={mode === "text"} onclick={() => setMode("text")} title="Original files, editable (⌘1)">Text</button>
-      <button class:on={mode === "semantic"} onclick={() => setMode("semantic")} title="Normalized, noise hidden (⌘2)">Semantic</button>
+      <button class:on={mode === "semantic"} onclick={() => setMode("semantic")} title="Normalized: key order, list order and server noise do not matter (⌘1)">Semantic</button>
+      <button class:on={mode === "text"} onclick={() => setMode("text")} title="The files exactly as they are on disk, with comments and formatting (⌘2)">Source</button>
     </div>
     {#if mode === "text"}
-      <span>{chunks} {chunks === 1 ? "text difference" : "text differences"}</span>
+      <span>{chunks} {chunks === 1 ? "difference" : "differences"}</span>
     {:else}
       <span>{changedCount} of {result?.resources.length ?? 0} resources differ</span>
     {/if}
     <button onclick={() => active().jump(-1)} title="Previous difference (⌥↑)">↑</button>
     <button onclick={() => active().jump(1)} title="Next difference (⌥↓)">↓</button>
     {#if mode === "semantic"}
-      <span class="hint">Read-only view · double-click or start typing to edit the source · arrows apply changes</span>
+      {#if semError}
+        <span class="error" title={semError}>{semError}</span>
+      {:else}
+        <span class="hint">Edits here go to the source files · ⌘J shows the place in Source</span>
+      {/if}
     {/if}
     <span class="spacer"></span>
     {#if dirMode}
@@ -594,6 +646,7 @@
   .path small, .path i { color: var(--muted); font-size: 11px; }
   footer { display: flex; align-items: center; gap: 8px; padding: 4px 10px; background: var(--panel); border-top: 1px solid var(--border); font-size: 12px; white-space: nowrap; }
   .hint { color: var(--muted); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .error { color: var(--removed); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .spacer { flex: 1; }
   label { display: flex; align-items: center; gap: 4px; }
   .segmented { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; flex: none; }

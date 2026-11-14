@@ -65,3 +65,24 @@ export function planRevert(before: string, current: string, touched: Touched[], 
   }
   return planApply(items, "a-to-b", current);
 }
+
+/**
+ * The user edited the normalized (semantic) text of one side from `oldNorm`
+ * to `newNorm`: compute edits that carry exactly those changes over to the
+ * real `source` text of that side, keeping its formatting and comments.
+ * Returns `parseError` (and no edits) while `newNorm` is not valid YAML.
+ */
+export function planSemanticEdit(
+  oldNorm: string, newNorm: string, source: string, options: Partial<CompareOptions> = {},
+): ApplyResult & { parseError?: { line: number; message: string } } {
+  const diff = compareTexts(oldNorm, newNorm, options);
+  if (diff.errors.b.length) return { side: "b", edits: [], errors: [], parseError: diff.errors.b[0] };
+  const touched: Touched[] = [];
+  for (const r of diff.resources) {
+    if (r.status === "equal") continue;
+    if (!r.a || !r.b) touched.push({ key: (r.a ?? r.b)!.key });
+    else for (const c of r.changes) touched.push({ key: r.b.key, path: c.path });
+  }
+  if (!touched.length) return { side: "b", edits: [], errors: [] };
+  return planRevert(newNorm, source, touched, options);
+}

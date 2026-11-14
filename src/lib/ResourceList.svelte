@@ -88,7 +88,7 @@
             <span class="arrows">
               <button title="Apply left → right" onclick={() => onapply([{ resource: r, change: c }], "a-to-b")}>→</button>
               <button title="Apply right → left" onclick={() => onapply([{ resource: r, change: c }], "b-to-a")}>←</button>
-              <button title="Edit in source (Text mode)" onclick={() => { active = changeId(r, i); onedit(r, c); }}>✎</button>
+              <button title="Show in Source" onclick={() => { active = changeId(r, i); onedit(r, c); }}>✎</button>
             </span>
           </div>
         {/each}

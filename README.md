@@ -32,7 +32,8 @@ Run with files or folders: `YAD.app/Contents/MacOS/YAD left.yaml right.yaml`, `�
 | ⌘O / ⇧⌘O | Open file left / right (add ⌥ for a folder) |
 | ⌘S | Save focused side (⇧⌘S — all changed files) |
 | ⌥⌘↓ / ⌥⌘↑ | Next / previous file (folder mode) |
-| ⌘1 / ⌘2 | Text mode (original, editable) / Semantic mode (normalized) |
+| ⌘1 / ⌘2 | Semantic view (normalized, editable) / Source view (files as on disk) |
+| ⌘J | Show the place under the cursor in Source |
 | ⌘B | Toggle changes panel |
 | ⌥↓ / ⌥↑ | Next / previous difference |
 | ⌘F | Search |
