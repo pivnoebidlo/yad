@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Op } from "./workspace";
+  import { t } from "./i18n.svelte";
 
   interface Props {
     ops: Op[];
@@ -16,9 +17,9 @@
         <div class="row">
           <div class="text" title={op.label}>
             <span class="label">{op.label}</span>
-            <small>{op.side === "a" ? "left" : "right"}{showFiles && op.rel ? ` · ${op.rel}` : ""}</small>
+            <small>{op.side === "a" ? t("left") : t("right")}{showFiles && op.rel ? ` · ${op.rel}` : ""}</small>
           </div>
-          <button title="Undo this change only (later edits are kept)" onclick={() => onrevert(op)}>Undo</button>
+          <button title={t("undoTitle")} onclick={() => onrevert(op)}>{t("undo")}</button>
         </div>
       {/each}
     </div>

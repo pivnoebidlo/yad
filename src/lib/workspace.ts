@@ -1,4 +1,4 @@
-import { compareTexts, type CompareResult, type Touched } from "./semantic";
+import { compareTexts, type CompareOptions, type CompareResult, type Touched } from "./semantic";
 import { joinPath, type Side } from "./files";
 
 /**
@@ -42,13 +42,13 @@ export interface Entry {
 
 export const isDirty = (b?: Buf) => !!b && (b.text !== b.saved || (!b.exists && b.text !== ""));
 
-export function statusOf(e: Entry, result?: CompareResult): FileStatus {
+export function statusOf(e: Entry, result?: CompareResult, options?: Partial<CompareOptions>): FileStatus {
   const a = e.a?.text, b = e.b?.text;
   if (a === undefined && b === undefined) return "equal";
   if (a === undefined) return "added";
   if (b === undefined) return "removed";
   if (a === b) return "equal";
-  const r = result ?? compareTexts(a, b);
+  const r = result ?? compareTexts(a, b, options);
   if (r.errors.a.length || r.errors.b.length) return "error";
   return r.resources.some((x) => x.status !== "equal") ? "changed" : "reordered";
 }

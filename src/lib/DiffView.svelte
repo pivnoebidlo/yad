@@ -5,15 +5,16 @@
   import { MergeView, goToNextChunk, goToPreviousChunk, type Chunk } from "@codemirror/merge";
   import { history, undo as cmUndo, redo as cmRedo } from "@codemirror/commands";
   import { minimalEdit } from "./workspace";
-  import { baseSetup, languageExt, themeExt } from "./editor";
+  import { baseSetup, languageExt, themeExt, type EditorTheme } from "./editor";
   import { langFor, type Side } from "./files";
   import type { Direction, Edit } from "./semantic";
   import type { Marker } from "./workspace";
+  import { t } from "./i18n.svelte";
 
   type Span = { from: number; to: number };
 
   interface Props {
-    dark: boolean;
+    theme: EditorTheme;
     collapse: boolean;
     readonly?: boolean;
     /** Show →/← buttons between the editors for every chunk. */
@@ -30,7 +31,7 @@
     onmarker?: (id: number) => void;
   }
   let {
-    dark, collapse, readonly = false, arrows = true, onarrow, onchange, onuseredit, ontx, onchunks,
+    theme, collapse, readonly = false, arrows = true, onarrow, onchange, onuseredit, ontx, onchunks,
     markers = [], onmarker,
   }: Props = $props();
 
@@ -75,8 +76,8 @@
     const el = document.createElement("div");
     el.className = "yad-arrows";
     for (const [dir, label, title] of [
-      ["a-to-b", "→", "Replace right with left"],
-      ["b-to-a", "←", "Replace left with right"],
+      ["a-to-b", "→", t("replaceRight")],
+      ["b-to-a", "←", t("replaceLeft")],
     ]) {
       const b = document.createElement("button");
       b.dataset.dir = dir;
@@ -143,7 +144,7 @@
       const b = document.createElement("button");
       b.className = "yad-undo";
       b.textContent = "✕";
-      b.title = `Undo: ${m.title}`;
+      b.title = t("undoThis", { what: m.title });
       b.style.top = top + "px";
       // Keep editor focus on press; act only on a full click on the button,
       // so a press that started elsewhere can never undo anything.
@@ -168,7 +169,7 @@
   onMount(() => {
     const ext = (side: Side) => [
       baseSetup({
-        ...comp[side], lang: "plain", dark, readonly,
+        ...comp[side], lang: "plain", theme0: theme, readonly,
         onChange: () => changed(side),
         onUpdate: (u) => {
           if (u.docChanged) ontx?.(side, u.changes);
@@ -195,10 +196,10 @@
   });
 
   $effect(() => {
-    const d = dark;
+    const th = theme;
     if (!mv) return;
     for (const side of ["a", "b"] as const)
-      view(side).dispatch({ effects: comp[side].theme.reconfigure(themeExt(d)) });
+      view(side).dispatch({ effects: comp[side].theme.reconfigure(themeExt(th)) });
   });
 
   $effect(() => {

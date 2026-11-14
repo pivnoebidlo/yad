@@ -6,7 +6,7 @@ import type { CompareOptions, CompareResult, PathSeg, ResourceDiff } from "./typ
 
 export * from "./types";
 export { defaultOptions, DEFAULT_IGNORE, DEFAULT_MERGE_KEYS } from "./config";
-export { formatPath, locatePath, shortPath } from "./util";
+export { formatPath, locatePath, parsePath, shortPath } from "./util";
 export { renderNormalized, normalizeResource, type NormalizedView } from "./normalize";
 export { planApply, applyEdits, type ApplyItem, type ApplyResult, type Direction, type Edit } from "./patch";
 

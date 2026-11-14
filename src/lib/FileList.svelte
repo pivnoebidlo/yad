@@ -1,5 +1,6 @@
 <script lang="ts">
   import { isDirty, type Entry, type FileStatus } from "./workspace";
+  import { t } from "./i18n.svelte";
 
   interface Props {
     entries: Entry[];
@@ -11,14 +12,8 @@
   let hideEqual = $state(true);
   let list: HTMLDivElement;
 
-  const hint: Record<FileStatus, string> = {
-    changed: "Files differ",
-    reordered: "Same content, only order or formatting differs",
-    equal: "Identical",
-    added: "Only on the right",
-    removed: "Only on the left",
-    error: "Does not parse",
-  };
+  const hint = (s: FileStatus) =>
+    ({ changed: t("filesDiffer"), reordered: t("orderOnly"), equal: t("identical"), added: t("onlyRight"), removed: t("onlyLeft"), error: t("noParse") })[s];
   const counts = $derived.by(() => {
     const c: Record<FileStatus, number> = { changed: 0, reordered: 0, equal: 0, added: 0, removed: 0, error: 0 };
     for (const e of entries) c[e.status]++;
@@ -50,24 +45,24 @@
 
 <div class="files">
   <div class="summary">
-    <span title="Files differ"><i class="dot s-changed"></i>{counts.changed}</span>
-    <span title="Only on the right"><i class="dot s-added"></i>{counts.added}</span>
-    <span title="Only on the left"><i class="dot s-removed"></i>{counts.removed}</span>
-    <span title="Only order or formatting differs"><i class="dot s-reordered"></i>{counts.reordered}</span>
-    {#if counts.error}<span title="Do not parse"><i class="dot s-error"></i>{counts.error}</span>{/if}
-    <label title="Hide identical files and files that differ only in order/formatting"><input type="checkbox" bind:checked={hideEqual} /> hide equal</label>
+    <span title={t("filesDiffer")}><i class="dot s-changed"></i>{counts.changed}</span>
+    <span title={t("onlyRight")}><i class="dot s-added"></i>{counts.added}</span>
+    <span title={t("onlyLeft")}><i class="dot s-removed"></i>{counts.removed}</span>
+    <span title={t("orderOnly")}><i class="dot s-reordered"></i>{counts.reordered}</span>
+    {#if counts.error}<span title={t("noParse")}><i class="dot s-error"></i>{counts.error}</span>{/if}
+    <label title={t("hideEqualFilesTitle")}><input type="checkbox" bind:checked={hideEqual} /> {t("hideEqual")}</label>
   </div>
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-  <div class="items" bind:this={list} tabindex="0" role="listbox" aria-label="Files" onkeydown={onkey}>
+  <div class="items" bind:this={list} tabindex="0" role="listbox" aria-label={t("files")} onkeydown={onkey}>
     {#each visible as { e, i } (e.rel)}
       <button class="row s-{e.status}" class:active={i === current} data-i={i} role="option" aria-selected={i === current}
-        onclick={() => onselect(i)} title={`${e.rel}\n${hint[e.status]}`}>
+        onclick={() => onselect(i)} title={`${e.rel}\n${hint(e.status)}`}>
         <i class="dot s-{e.status}"></i>
         <span class="name">{e.rel}</span>
-        {#if isDirty(e.a) || isDirty(e.b)}<span class="dirty" title="Unsaved changes">✎</span>{/if}
+        {#if isDirty(e.a) || isDirty(e.b)}<span class="dirty" title={t("unsaved")}>✎</span>{/if}
       </button>
     {:else}
-      <div class="empty">No differing files</div>
+      <div class="empty">{t("noDifferingFiles")}</div>
     {/each}
   </div>
 </div>
