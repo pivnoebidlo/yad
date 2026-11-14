@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick } from "svelte";
+  import { onMount, tick, untrack } from "svelte";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { open, ask, message } from "@tauri-apps/plugin-dialog";
@@ -11,6 +11,10 @@
   import HistoryList from "./lib/HistoryList.svelte";
   import Section from "./lib/Section.svelte";
   import Splitter from "./lib/Splitter.svelte";
+  import Settings from "./lib/Settings.svelte";
+  import { settings, compareOptions, effectiveTheme } from "./lib/prefs.svelte";
+  import { t, tn } from "./lib/i18n.svelte";
+  import { actionFor, comboOf, formatCombo, type ActionId } from "./lib/hotkeys";
   import {
     readText, writeText, initialPaths, baseName, pathKind, listFiles, joinPath, type Side,
   } from "./lib/files";
@@ -18,7 +22,7 @@
     decodeText, encodeText, isDirty, minimalEdit, otherSide, statusOf, storeEditorText, type Buf, type Entry, type Marker, type Op,
   } from "./lib/workspace";
   import {
-    applyEdits, compareTexts, defaultOptions, formatPath, locatePath, planApply, planRevert, planSemanticEdit, renderNormalized, shortPath,
+    applyEdits, compareTexts, formatPath, locatePath, planApply, planRevert, planSemanticEdit, renderNormalized, shortPath,
     type ApplyItem, type Change, type CompareResult, type Direction, type NormalizedView,
     type ResourceDiff, type SourceRange, type Touched,
   } from "./lib/semantic";
@@ -72,7 +76,7 @@
   let dropTarget = $state<Side | null>(null);
 
   // Semantic state. `$state.raw`: results hold yaml nodes, which must not be proxied.
-  const opts = defaultOptions();
+  const opts = $derived(compareOptions());
   let result = $state.raw<CompareResult | null>(null);
   let normalized = $state.raw<NormalizedView | null>(null);
   /** True while a whole document is being replaced (file switch): positions are not mapped. */
@@ -83,9 +87,25 @@
   let semError = $state<string | null>(null);
   let timer: ReturnType<typeof setTimeout> | undefined;
 
-  const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
-  let dark = $state(darkQuery.matches);
-  darkQuery.addEventListener("change", (e) => (dark = e.matches));
+  const theme = $derived(effectiveTheme());
+  $effect(() => {
+    document.documentElement.dataset.theme = theme;
+  });
+
+  let settingsOpen = $state(false);
+  let settingsTab = $state<"general" | "comparison" | "hotkeys" | "about">("general");
+  /** " (⌘S)" for tooltips, following the current bindings. */
+  const hk = (a: ActionId) => (settings.hotkeys[a] ? ` (${formatCombo(settings.hotkeys[a])})` : "");
+
+  // Comparison settings changed: re-evaluate every file and the current view.
+  $effect(() => {
+    const o = opts;
+    untrack(() => {
+      if (!raw || !sem) return;
+      for (const e of entries) e.status = statusOf(e, undefined, o);
+      recompute();
+    });
+  });
 
   const filters = [
     { name: "YAML / JSON", extensions: ["yaml", "yml", "json"] },
@@ -113,7 +133,7 @@
       if (semSide === side) continue; // the user is typing there, or the text does not parse yet
       sem.setDocSoft(side, normalized[side]);
     }
-    e.status = statusOf(e, result);
+    e.status = statusOf(e, result, opts);
   }
 
   function schedule() {
@@ -132,13 +152,12 @@
 
   function confirmDiscard(side: Side) {
     if (!entries.some((e) => isDirty(e[side]))) return Promise.resolve(true);
-    const what = side === "a" ? "left" : "right";
-    return ask(`Discard unsaved changes on the ${what} side?`, { title: "Unsaved changes", kind: "warning" });
+    return ask(t("discardSide", { side: side === "a" ? t("left") : t("right") }), { title: t("unsavedTitle"), kind: "warning" });
   }
 
   async function openPath(side: Side, path: string) {
     const kind = await pathKind(path);
-    if (kind === "missing") return message(`${path} does not exist`, { title: "Cannot open", kind: "error" });
+    if (kind === "missing") return message(t("notExist", { path }), { title: t("cannotOpen"), kind: "error" });
     if (!(await confirmDiscard(side))) return;
 
     // A folder on one side and a file on the other cannot be compared: reset the other side.
@@ -154,7 +173,7 @@
       else await loadDir(side, path);
       sources[side] = { kind, path };
     } catch (e) {
-      return message(String(e), { title: "Cannot open", kind: "error" });
+      return message(String(e), { title: t("cannotOpen"), kind: "error" });
     }
     const keep = entries[current]?.rel;
     let i = entries.findIndex((e) => e.rel === keep);
@@ -167,7 +186,7 @@
     const buf: Buf = { path, saved: text, text, exists: true, eol, bom };
     const e = entries.length === 1 && entries[0].rel === "" ? entries[0] : { rel: "", status: "equal" as const };
     e[side] = buf;
-    e.status = statusOf(e);
+    e.status = statusOf(e, undefined, opts);
     entries = [e];
   }
 
@@ -190,7 +209,7 @@
     entries = [...byRel.values()]
       .filter((e) => e.a || e.b)
       .sort((x, y) => (x.rel < y.rel ? -1 : 1))
-      .map((e) => ({ ...e, status: statusOf(e) }));
+      .map((e) => ({ ...e, status: statusOf(e, undefined, opts) }));
   }
 
   function selectEntry(i: number) {
@@ -225,7 +244,7 @@
       buf.saved = buf.text;
       buf.exists = true;
     } catch (e) {
-      await message(String(e), { title: "Cannot save file", kind: "error" });
+      await message(String(e), { title: t("cannotSave"), kind: "error" });
     }
   }
 
@@ -270,7 +289,7 @@
     }
     recompute();
     if (plan.errors.length)
-      await message(plan.errors.join("\n"), { title: "Some changes could not be applied", kind: "warning" });
+      await message(plan.errors.join("\n"), { title: t("someNotApplied"), kind: "warning" });
   }
 
   function describe(items: ApplyItem[], dir: Direction): string {
@@ -280,7 +299,7 @@
       return c ? `${arrow} ${shortPath(c.path)}` : `${arrow} ${r.label}`;
     }
     const names = [...new Set(items.map((i) => i.resource.label))];
-    return `${arrow} ${items.length} changes in ${names.join(", ")}`;
+    return `${arrow} ${t("nChangesIn", { n: items.length, names: names.join(", ") })}`;
   }
 
   function record(op: Omit<Op, "id">) {
@@ -299,10 +318,10 @@
     else if (op.touched) {
       const plan = planRevert(op.before ?? "", cur, op.touched, opts);
       if (plan.errors.length)
-        await message(plan.errors.join("\n"), { title: "Part of the change could not be undone", kind: "warning" });
+        await message(plan.errors.join("\n"), { title: t("partNotUndone"), kind: "warning" });
       next = applyEdits(cur, plan.edits);
     } else {
-      await message("This text block was copied before other edits to the same file, so it cannot be undone on its own. Use ⌘Z or edit the text.", { title: "Cannot undo", kind: "info" });
+      await message(t("textBlockUndo", { key: formatCombo("Mod+Z") }), { title: t("cannotUndo"), kind: "info" });
       return;
     }
     ops = ops.filter((o) => o.id !== op.id);
@@ -313,7 +332,7 @@
     } else {
       if (op.before === null && !e[op.side]?.exists) delete e[op.side];
       else if (e[op.side]) e[op.side]!.text = next;
-      e.status = statusOf(e);
+      e.status = statusOf(e, undefined, opts);
     }
     lastSide = op.side;
   }
@@ -326,7 +345,7 @@
     const after = raw.getDoc(target);
     if (after !== before) {
       const anchor = target === "b" ? chunk.fromB : chunk.fromA;
-      record({ rel: entries[current]?.rel ?? "", side: target, label: `${dir === "a-to-b" ? "→" : "←"} text block`, before, after, anchor });
+      record({ rel: entries[current]?.rel ?? "", side: target, label: `${dir === "a-to-b" ? "→" : "←"} ${t("textBlock")}`, before, after, anchor });
     }
   }
 
@@ -389,11 +408,11 @@
     if (!normalized || !entries[current]) return;
     const plan = planSemanticEdit(normalized[side], sem.getDoc(side), raw.getDoc(side), opts);
     if (plan.parseError) {
-      semError = `${side === "a" ? "Left" : "Right"}, line ${plan.parseError.line}: ${plan.parseError.message.split("\n")[0]} — not applied yet`;
+      semError = t("semParseError", { side: side === "a" ? t("sideLeft") : t("sideRight"), line: plan.parseError.line, message: plan.parseError.message.split("\n")[0] });
       semSide = side; // keep this side's text until it parses
       return;
     }
-    semError = plan.errors.length ? `Not applied: ${plan.errors.join("; ")}` : null;
+    semError = plan.errors.length ? t("semNotApplied", { errors: plan.errors.join("; ") }) : null;
     if (plan.edits.length) raw.applyEdits(side, plan.edits);
     recompute();
   }
@@ -469,44 +488,58 @@
 
   const active = () => (mode === "text" ? raw : sem);
 
+  /** App shortcuts (rebindable in Settings), checked before the editors see the key. */
+  function onhotkey(e: KeyboardEvent) {
+    if (settingsOpen) return; // the Settings window handles its own keys
+    const action = actionFor(comboOf(e), settings.hotkeys);
+    if (!action) return;
+    e.preventDefault();
+    e.stopPropagation();
+    run(action);
+  }
+
+  function run(action: ActionId) {
+    switch (action) {
+      case "settings": settingsOpen = true; break;
+      case "save": {
+        const side = (mode === "text" ? raw : sem).focusedSide();
+        flushSemantic();
+        if (side) save(side);
+        else { save("a"); save("b"); }
+        break;
+      }
+      case "saveAll": flushSemantic(); saveAll(); break;
+      case "openFileLeft": pick("a", false); break;
+      case "openFileRight": pick("b", false); break;
+      case "openFolderLeft": pick("a", true); break;
+      case "openFolderRight": pick("b", true); break;
+      case "modeSemantic": setMode("semantic"); break;
+      case "modeSource": setMode("text"); break;
+      case "showInSource":
+        if (mode === "semantic") {
+          const side = sem.focusedSide() ?? "b";
+          flushSemantic();
+          showInSource(side, sem.cursor(side));
+        }
+        break;
+      case "toggleSidebar": sidebar = !sidebar; break;
+      case "prevDiff": active().jump(-1); break;
+      case "nextDiff": active().jump(1); break;
+      case "prevFile": if (dirMode) fileList?.move(-1); break;
+      case "nextFile": if (dirMode) fileList?.move(1); break;
+    }
+  }
+
+  /** Cmd+Z that no editor handled (nothing to undo there, or focus in the side panel). */
   function onkey(e: KeyboardEvent) {
     const mod = e.metaKey || e.ctrlKey;
-    if (mod && e.key.toLowerCase() === "s") {
-      e.preventDefault();
-      const side = mode === "text" ? raw.focusedSide() : null;
-      if (e.shiftKey) saveAll();
-      else if (side) save(side);
-      else { save("a"); save("b"); }
-    } else if (mod && e.key.toLowerCase() === "z" && !e.defaultPrevented) {
-      // Not handled by an editor (nothing to undo there, or focus in the side
-      // panel): undo in the source of the side the last change went to.
-      const side = lastSide;
-      if (!side) return;
-      flushSemantic();
-      e.preventDefault();
-      if (e.shiftKey) raw.redo(side);
-      else raw.undo(side);
-    } else if (mod && e.key.toLowerCase() === "j" && mode === "semantic") {
-      e.preventDefault();
-      const side = sem.focusedSide() ?? "b";
-      flushSemantic();
-      showInSource(side, sem.cursor(side));
-    } else if (mod && e.key.toLowerCase() === "o") {
-      e.preventDefault();
-      pick(e.shiftKey ? "b" : "a", e.altKey);
-    } else if (mod && (e.key === "1" || e.key === "2")) {
-      e.preventDefault();
-      setMode(e.key === "1" ? "semantic" : "text");
-    } else if (mod && e.key === "b") {
-      e.preventDefault();
-      sidebar = !sidebar;
-    } else if (e.altKey && mod && (e.key === "ArrowDown" || e.key === "ArrowUp") && dirMode) {
-      e.preventDefault();
-      fileList?.move(e.key === "ArrowDown" ? 1 : -1);
-    } else if (e.altKey && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
-      e.preventDefault();
-      active().jump(e.key === "ArrowDown" ? 1 : -1);
-    }
+    if (settingsOpen || !mod || e.code !== "KeyZ" || e.defaultPrevented) return;
+    const side = lastSide;
+    if (!side) return;
+    flushSemantic();
+    e.preventDefault();
+    if (e.shiftKey) raw.redo(side);
+    else raw.undo(side);
   }
 
   onMount(() => {
@@ -535,7 +568,7 @@
       win.onCloseRequested(async (ev) => {
         if (!anyDirty()) return;
         ev.preventDefault();
-        const ok = await ask("There are unsaved changes. Quit anyway?", { title: "Unsaved changes", kind: "warning" });
+        const ok = await ask(t("quitAnyway"), { title: t("unsavedTitle"), kind: "warning" });
         if (ok) await win.destroy();
       }),
     );
@@ -552,7 +585,7 @@
   });
 </script>
 
-<svelte:window onkeydown={onkey} />
+<svelte:window onkeydowncapture={onhotkey} onkeydown={onkey} />
 
 <main>
   <div class="body">
@@ -565,14 +598,14 @@
         c[id] ? "flex: none" : filler === id ? "flex: 1 1 0; min-height: 80px" : `flex: none; height: ${h}px`}
       <aside style="width: {layout.width}px">
         {#if dirMode}
-          <Section title="Files" badge={entries.length} collapsed={c.files} ontoggle={() => toggle("files")} style={paneStyle("files", layout.files)}>
+          <Section title={t("files")} badge={entries.length} collapsed={c.files} ontoggle={() => toggle("files")} style={paneStyle("files", layout.files)}>
             <FileList bind:this={fileList} {entries} {current} onselect={selectEntry} />
           </Section>
           {#if !c.files && !c.changes}
             <Splitter ondrag={(d) => (layout.files = clamp(layout.files + d, 60, window.innerHeight - 200))} />
           {/if}
         {/if}
-        <Section title="Changes" badge={result ? result.resources.reduce((n, r) => n + (r.status === "equal" ? 0 : r.changes.length || 1), 0) : ""}
+        <Section title={t("changes")} badge={result ? result.resources.reduce((n, r) => n + (r.status === "equal" ? 0 : r.changes.length || 1), 0) : ""}
           collapsed={c.changes} ontoggle={() => toggle("changes")} style={paneStyle("changes", 0)}>
           <ResourceList {result} {onresource} onchange={onchangeClick} {onedit} onapply={apply} />
         </Section>
@@ -580,7 +613,7 @@
           {#if !c.history && !c.changes}
             <Splitter ondrag={(d) => (layout.history = clamp(layout.history - d, 60, window.innerHeight - 200))} />
           {/if}
-          <Section title="History" badge={ops.length} collapsed={c.history} ontoggle={() => toggle("history")} style={paneStyle("history", layout.history)}>
+          <Section title={t("history")} badge={ops.length} collapsed={c.history} ontoggle={() => toggle("history")} style={paneStyle("history", layout.history)}>
             <HistoryList {ops} showFiles={dirMode} onrevert={revertOp} />
           </Section>
         {/if}
@@ -595,32 +628,32 @@
           {@const buf = entry?.[side]}
           <div class="pane" class:drop={dropTarget === side}>
             <div class="open">
-              <button onclick={() => pick(side, false)} title={side === "a" ? "Open file on the left (⌘O)" : "Open file on the right (⇧⌘O)"}>File…</button>
-              <button onclick={() => pick(side, true)} title={side === "a" ? "Open folder on the left (⌥⌘O)" : "Open folder on the right (⌥⇧⌘O)"}>Folder…</button>
+              <button onclick={() => pick(side, false)} title={side === "a" ? t("openFileLeft") + hk("openFileLeft") : t("openFileRight") + hk("openFileRight")}>{t("openFile")}</button>
+              <button onclick={() => pick(side, true)} title={side === "a" ? t("openFolderLeft") + hk("openFolderLeft") : t("openFolderRight") + hk("openFolderRight")}>{t("openFolder")}</button>
             </div>
             <span class="path" title={buf?.path ?? src?.path ?? ""}>
               {#if !src}
-                <i>Drop a file or folder here</i>
+                <i>{t("dropHere")}</i>
               {:else if dirMode}
-                <b>{entry ? entry.rel : "—"}{isDirty(buf) ? " ✎" : ""}{entry && !buf ? " (missing)" : ""}</b>
+                <b>{entry ? entry.rel : "—"}{isDirty(buf) ? " ✎" : ""}{entry && !buf ? ` ${t("missing")}` : ""}</b>
                 <small>{src.path}</small>
               {:else}
                 <b>{baseName(src.path)}{isDirty(buf) ? " ✎" : ""}</b>
                 <small>{src.path}</small>
               {/if}
             </span>
-            <button onclick={() => save(side)} disabled={!isDirty(buf)} title="Save (⌘S), all files: ⇧⌘S">Save</button>
+            <button onclick={() => save(side)} disabled={!isDirty(buf)} title={t("saveTitle") + hk("save")}>{t("save")}</button>
           </div>
         {/each}
       </header>
 
       <div class="views">
         <div class="view" class:hidden={mode !== "text"}>
-          <DiffView bind:this={raw} {dark} {collapse} onarrow={onTextArrow} onchange={onRawChange} ontx={onRawTx}
+          <DiffView bind:this={raw} {theme} {collapse} onarrow={onTextArrow} onchange={onRawChange} ontx={onRawTx}
             onchunks={(n) => (chunks = n)} markers={rawMarkers} {onmarker} />
         </div>
         <div class="view" class:hidden={mode !== "semantic"}>
-          <DiffView bind:this={sem} {dark} {collapse} onarrow={onSemanticArrow} onuseredit={onSemanticUserEdit}
+          <DiffView bind:this={sem} {theme} {collapse} onarrow={onSemanticArrow} onuseredit={onSemanticUserEdit}
             markers={semMarkers} {onmarker} />
         </div>
       </div>
@@ -628,32 +661,37 @@
   </div>
 
   <footer>
-    <button class="toggle" class:on={sidebar} onclick={() => (sidebar = !sidebar)} title="Toggle side panel (⌘B)">☰</button>
+    <button class="toggle" class:on={sidebar} onclick={() => (sidebar = !sidebar)} title={t("toggleSidebar") + hk("toggleSidebar")}>☰</button>
     <div class="segmented" role="tablist">
-      <button class:on={mode === "semantic"} onclick={() => setMode("semantic")} title="Normalized: key order, list order and server noise do not matter (⌘1)">Semantic</button>
-      <button class:on={mode === "text"} onclick={() => setMode("text")} title="The files exactly as they are on disk, with comments and formatting (⌘2)">Source</button>
+      <button class:on={mode === "semantic"} onclick={() => setMode("semantic")} title={t("semanticTitle") + hk("modeSemantic")}>{t("semantic")}</button>
+      <button class:on={mode === "text"} onclick={() => setMode("text")} title={t("sourceTitle") + hk("modeSource")}>{t("source")}</button>
     </div>
     {#if mode === "text"}
-      <span>{chunks} {chunks === 1 ? "difference" : "differences"}</span>
+      <span>{tn("differences", chunks)}</span>
     {:else}
-      <span>{changedCount} of {result?.resources.length ?? 0} resources differ</span>
+      <span>{t("resourcesDiffer", { n: changedCount, total: result?.resources.length ?? 0 })}</span>
     {/if}
-    <button onclick={() => active().jump(-1)} title="Previous difference (⌥↑)">↑</button>
-    <button onclick={() => active().jump(1)} title="Next difference (⌥↓)">↓</button>
+    <button onclick={() => active().jump(-1)} title={t("prevDiff") + hk("prevDiff")}>↑</button>
+    <button onclick={() => active().jump(1)} title={t("nextDiff") + hk("nextDiff")}>↓</button>
     {#if mode === "semantic"}
       {#if semError}
         <span class="error" title={semError}>{semError}</span>
       {:else}
-        <span class="hint">Edits here go to the source files · ⌘J shows the place in Source</span>
+        <span class="hint">{t("semanticHint", { key: formatCombo(settings.hotkeys.showInSource) })}</span>
       {/if}
     {/if}
     <span class="spacer"></span>
     {#if dirMode}
-      <button onclick={saveAll} disabled={!anyDirty()} title="Save all changed files (⇧⌘S)">Save all</button>
+      <button onclick={saveAll} disabled={!anyDirty()} title={t("saveAllTitle") + hk("saveAll")}>{t("saveAll")}</button>
     {/if}
-    <label><input type="checkbox" bind:checked={collapse} /> Collapse unchanged</label>
+    <label><input type="checkbox" bind:checked={collapse} /> {t("collapseUnchanged")}</label>
+    <button class="gear" onclick={() => (settingsOpen = true)} title={t("settings") + hk("settings")}>⚙</button>
   </footer>
 </main>
+
+{#if settingsOpen}
+  <Settings bind:tab={settingsTab} onclose={() => (settingsOpen = false)} />
+{/if}
 
 <style>
   main { display: flex; flex-direction: column; height: 100vh; }
@@ -678,6 +716,8 @@
   .segmented { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; flex: none; }
   .segmented button { all: unset; padding: 2px 10px; cursor: default; }
   .segmented button + button { border-left: 1px solid var(--border); }
-  .segmented button.on, .toggle.on { background: var(--accent); color: white; }
+  .segmented button.on, .toggle.on { background: var(--accent); color: var(--accent-text); }
   .toggle { padding: 2px 8px; }
+  .gear { padding: 0 6px; font-size: 14px; background: none; border: none; color: var(--muted); }
+  .gear:hover { color: var(--text); }
 </style>

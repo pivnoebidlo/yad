@@ -1,5 +1,6 @@
 <script lang="ts">
   import { formatPath, shortPath, type ApplyItem, type Change, type CompareResult, type Direction, type ResourceDiff, type ResourceStatus } from "./semantic";
+  import { t } from "./i18n.svelte";
 
   interface Props {
     result: CompareResult | null;
@@ -41,11 +42,11 @@
 
 <div class="list">
   <div class="summary">
-    <span class="s-changed" title="Changed">~{counts.changed}</span>
-    <span class="s-added" title="Only on the right">+{counts.added}</span>
-    <span class="s-removed" title="Only on the left">−{counts.removed}</span>
-    <span class="s-equal" title="Equal">={counts.equal}</span>
-    <label title="Hide equal resources"><input type="checkbox" bind:checked={hideEqual} /> hide equal</label>
+    <span class="s-changed" title={t("changed")}>~{counts.changed}</span>
+    <span class="s-added" title={t("onlyRight")}>+{counts.added}</span>
+    <span class="s-removed" title={t("onlyLeft")}>−{counts.removed}</span>
+    <span class="s-equal" title={t("equal")}>={counts.equal}</span>
+    <label title={t("hideEqualResourcesTitle")}><input type="checkbox" bind:checked={hideEqual} /> {t("hideEqual")}</label>
   </div>
 
   {#each errors as e}
@@ -69,8 +70,8 @@
       </button>
       {#if r.status !== "equal"}
         <span class="arrows res-arrows">
-          <button title={r.a ? "Make the right side match the left for this resource" : "Remove this resource from the right"} onclick={() => onapply([{ resource: r }], "a-to-b")}>→</button>
-          <button title={r.b ? "Make the left side match the right for this resource" : "Remove this resource from the left"} onclick={() => onapply([{ resource: r }], "b-to-a")}>←</button>
+          <button title={r.a ? t("resMatchLeft") : t("resRemoveRight")} onclick={() => onapply([{ resource: r }], "a-to-b")}>→</button>
+          <button title={r.b ? t("resMatchRight") : t("resRemoveLeft")} onclick={() => onapply([{ resource: r }], "b-to-a")}>←</button>
         </span>
       {/if}
       </div>
@@ -86,15 +87,15 @@
               <span class="value">{changeText(c)}</span>
             </button>
             <span class="arrows">
-              <button title="Apply left → right" onclick={() => onapply([{ resource: r, change: c }], "a-to-b")}>→</button>
-              <button title="Apply right → left" onclick={() => onapply([{ resource: r, change: c }], "b-to-a")}>←</button>
-              <button title="Show in Source" onclick={() => { active = changeId(r, i); onedit(r, c); }}>✎</button>
+              <button title={t("applyLR")} onclick={() => onapply([{ resource: r, change: c }], "a-to-b")}>→</button>
+              <button title={t("applyRL")} onclick={() => onapply([{ resource: r, change: c }], "b-to-a")}>←</button>
+              <button title={t("showInSource")} onclick={() => { active = changeId(r, i); onedit(r, c); }}>✎</button>
             </span>
           </div>
         {/each}
       {/if}
     {:else}
-      <div class="empty">{result ? (result.resources.length ? "No differences" : "Nothing to compare") : "Open two files"}</div>
+      <div class="empty">{result ? (result.resources.length ? t("noDifferences") : t("nothingToCompare")) : t("openTwo")}</div>
     {/each}
   </div>
 </div>

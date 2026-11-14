@@ -25,6 +25,13 @@ npm test               # unit tests (semantic engine)
 
 Run with files or folders: `YAD.app/Contents/MacOS/YAD left.yaml right.yaml`, `… stage/ prod/`
 
+## Settings
+
+⌘, (or the gear in the bottom bar): language (English / Русский), theme,
+ignored server-managed fields, and keyboard shortcuts — every shortcut below
+can be reassigned. Shortcuts match physical keys, so they work with any
+keyboard layout.
+
 ## Shortcuts
 
 | Key | Action |
@@ -34,7 +41,8 @@ Run with files or folders: `YAD.app/Contents/MacOS/YAD left.yaml right.yaml`, `�
 | ⌥⌘↓ / ⌥⌘↑ | Next / previous file (folder mode) |
 | ⌘1 / ⌘2 | Semantic view (normalized, editable) / Source view (files as on disk) |
 | ⌘J | Show the place under the cursor in Source |
-| ⌘B | Toggle changes panel |
+| ⌘B | Toggle side panel |
+| ⌘, | Settings |
 | ⌥↓ / ⌥↑ | Next / previous difference |
 | ⌘F | Search |
 | ⌘Z / ⇧⌘Z | Undo / redo |

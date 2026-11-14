@@ -155,3 +155,33 @@ export function shortPath(path: PathSeg[]): string {
   while (start > 0 && typeof path[start] !== "string") start--;
   return start === 0 ? formatPath(path) : "…" + formatPath(path.slice(start));
 }
+
+/**
+ * Parse an ignore pattern written like `formatPath` output:
+ * `metadata.annotations["example.com/x"]`, `spec.*.status`. Returns null if
+ * it is malformed.
+ */
+export function parsePath(text: string): string[] | null {
+  const out: string[] = [];
+  let i = 0;
+  const s = text.trim();
+  if (!s) return null;
+  while (i < s.length) {
+    if (s[i] === "[") {
+      const m = /^\["((?:[^"\\]|\\.)*)"\]/.exec(s.slice(i));
+      if (!m) return null;
+      out.push(JSON.parse(`"${m[1]}"`));
+      i += m[0].length;
+    } else {
+      if (s[i] === ".") {
+        if (!out.length) return null;
+        i++;
+      }
+      const m = /^[^.\[\]]+/.exec(s.slice(i));
+      if (!m) return null;
+      out.push(m[0].trim());
+      i += m[0].length;
+    }
+  }
+  return out;
+}

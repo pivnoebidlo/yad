@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { compareTexts, formatPath, renderNormalized, defaultOptions, type CompareResult } from "./index";
+import { compareTexts, formatPath, parsePath, renderNormalized, defaultOptions, DEFAULT_IGNORE, type CompareResult } from "./index";
 
 const fixture = (name: string) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8");
 
@@ -230,5 +230,16 @@ describe("formatPath", () => {
     expect(
       formatPath(["metadata", "annotations", "example.com/x", "spec", 0, { key: "name", value: "web" }]),
     ).toBe('metadata.annotations["example.com/x"].spec[0][web]');
+  });
+});
+
+describe("parsePath", () => {
+  it("round-trips formatPath for ignore patterns", () => {
+    for (const p of DEFAULT_IGNORE) expect(parsePath(formatPath(p))).toEqual(p);
+    expect(parsePath('metadata.annotations["a.b/c"]')).toEqual(["metadata", "annotations", "a.b/c"]);
+    expect(parsePath("spec.*.status")).toEqual(["spec", "*", "status"]);
+  });
+  it("rejects malformed input", () => {
+    for (const bad of ["", ".a", "a..b", 'a["x]', "a[1]"]) expect(parsePath(bad)).toBeNull();
   });
 });
