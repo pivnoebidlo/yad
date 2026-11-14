@@ -118,3 +118,32 @@ export function formatPath(path: PathSeg[]): string {
   }
   return out;
 }
+
+/**
+ * Find the node at `path` inside a parsed tree and return its source range.
+ * For a map key the range covers `key: value`. Returns the deepest node
+ * reached if the full path does not exist.
+ */
+export function locatePath(root: Node, path: PathSeg[], ctx: SourceCtx): SourceRange | undefined {
+  let node: Node | null = root;
+  let range = nodeRange(root, ctx);
+  for (const seg of path) {
+    if (typeof seg === "string" && isMap(node)) {
+      const pair = getPair(node, seg);
+      if (!pair) break;
+      range = pairRange(pair, ctx);
+      node = deref(pair.value, ctx);
+    } else if (typeof seg === "number" && isSeq(node)) {
+      const it = deref(node.items[seg], ctx);
+      if (!it) break;
+      range = nodeRange(it, ctx);
+      node = it;
+    } else if (typeof seg === "object" && isSeq(node)) {
+      const it: Node | null | undefined = node.items.map((n) => deref(n, ctx)).find((n) => isMap(n) && getScalar(n, seg.key, ctx) === seg.value);
+      if (!it) break;
+      range = nodeRange(it, ctx);
+      node = it;
+    } else break;
+  }
+  return range;
+}

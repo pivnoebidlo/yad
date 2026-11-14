@@ -25,9 +25,11 @@ export function baseSetup(opts: {
   theme: Compartment;
   lang: Lang;
   dark: boolean;
-  onChange: () => void;
+  readonly?: boolean;
+  onChange?: () => void;
 }): Extension {
   return [
+    opts.readonly ? EditorState.readOnly.of(true) : [],
     lineNumbers(),
     highlightActiveLineGutter(),
     highlightSpecialChars(),
@@ -49,7 +51,7 @@ export function baseSetup(opts: {
     opts.language.of(languageExt(opts.lang)),
     opts.theme.of(themeExt(opts.dark)),
     EditorView.updateListener.of((u) => {
-      if (u.docChanged) opts.onChange();
+      if (u.docChanged) opts.onChange?.();
     }),
   ];
 }

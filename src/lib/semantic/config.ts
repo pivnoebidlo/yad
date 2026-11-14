@@ -41,6 +41,6 @@ export const defaultOptions = (): CompareOptions => ({
 /** Keys rendered first in normalized output; everything else is alphabetical. */
 export const KEY_PRIORITY = [
   "apiVersion", "kind", "metadata",
-  "name", "generateName", "namespace", "labels", "annotations",
+  "name", "generateName", "namespace", "labels", "annotations", "image",
   "spec", "data", "stringData", "binaryData",
 ];

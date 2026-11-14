@@ -27,6 +27,8 @@ Run with files: `yad.app/Contents/MacOS/yad left.yaml right.yaml`
 |---|---|
 | ⌘O / ⇧⌘O | Open left / right |
 | ⌘S | Save focused side (⇧⌘S — both) |
+| ⌘1 / ⌘2 | Text mode (original, editable) / Semantic mode (normalized) |
+| ⌘B | Toggle changes panel |
 | ⌥↓ / ⌥↑ | Next / previous difference |
 | ⌘F | Search |
 | ⌘Z / ⇧⌘Z | Undo / redo |

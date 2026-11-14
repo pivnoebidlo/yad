@@ -5,8 +5,8 @@ import type { CompareOptions, CompareResult, ResourceDiff } from "./types";
 
 export * from "./types";
 export { defaultOptions, DEFAULT_IGNORE, DEFAULT_MERGE_KEYS } from "./config";
-export { formatPath } from "./util";
-export { renderNormalized, normalizeResource } from "./normalize";
+export { formatPath, locatePath } from "./util";
+export { renderNormalized, normalizeResource, type NormalizedView } from "./normalize";
 
 const sortKey = (r: ResourceDiff) => {
   const id = (r.a ?? r.b)!.id;

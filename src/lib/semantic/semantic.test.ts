@@ -180,6 +180,7 @@ describe("renderNormalized", () => {
     const res = compareTexts(fixture("live.yaml"), "");
     const { a } = renderNormalized(res.resources, defaultOptions());
     expect(a.startsWith("# Deployment prod/web\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n  namespace: prod\n  labels:\n")).toBe(true);
+    expect(a).toContain("- name: web\n          image: registry.local/web:1.5.0\n");
     for (const noise of ["managedFields", "uid:", "status:", "annotations", "creationTimestamp"])
       expect(a).not.toContain(noise);
     // containers come out sorted by name: sidecar before web
@@ -187,6 +188,25 @@ describe("renderNormalized", () => {
     expect(a.indexOf("- name: sidecar")).toBeLessThan(a.indexOf("- name: web"));
     // env sorted by name: DB_HOST before LOG_LEVEL
     expect(a.indexOf("name: DB_HOST")).toBeLessThan(a.indexOf("name: LOG_LEVEL"));
+  });
+});
+
+describe("NormalizedView.locate", () => {
+  it("finds resources and paths in normalized text on both sides", () => {
+    const res = compareTexts(fixture("manifest.yaml"), fixture("live.yaml"));
+    const view = renderNormalized(res.resources, defaultOptions());
+    const dep = res.resources.find((r) => r.label.startsWith("Deployment"))!;
+    const image = dep.changes.find((c) => formatPath(c.path).endsWith("image"))!;
+    const ra = view.locate("a", dep.key, image.path)!;
+    const rb = view.locate("b", dep.key, image.path)!;
+    expect(view.a.slice(ra.from, ra.to)).toBe("image: registry.local/web:1.4.0");
+    expect(view.b.slice(rb.from, rb.to)).toBe("image: registry.local/web:1.5.0");
+    const ns = dep.changes.find((c) => formatPath(c.path) === "metadata.namespace")!;
+    const nb = view.locate("b", dep.key, ns.path)!;
+    expect(view.b.slice(nb.from, nb.to)).toBe("namespace: prod");
+    // Missing on the left: falls back to the deepest existing pair (metadata).
+    expect(view.a.slice(view.locate("a", dep.key, ns.path)!.from).startsWith("metadata:\n  name: web")).toBe(true);
+    expect(view.locate("a", "nope")).toBeUndefined();
   });
 });
 
