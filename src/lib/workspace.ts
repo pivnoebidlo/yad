@@ -1,13 +1,30 @@
 import { compareTexts, type CompareResult, type Touched } from "./semantic";
-import type { Side } from "./files";
+import { joinPath, type Side } from "./files";
 
-/** In-memory copy of a file; `exists` is false for a file not yet written. */
+/**
+ * In-memory copy of a file; `exists` is false for a file not yet written.
+ * `text`/`saved` always use "\n"; the file's own line ending and BOM are
+ * remembered and restored on save.
+ */
 export interface Buf {
   path: string;
   saved: string;
   text: string;
   exists: boolean;
+  eol: "\n" | "\r\n";
+  bom: boolean;
 }
+
+/** Split a file's content into "\n"-text plus its line ending and BOM. */
+export function decodeText(raw: string): { text: string; eol: Buf["eol"]; bom: boolean } {
+  const bom = raw.startsWith("\uFEFF");
+  const body = bom ? raw.slice(1) : raw;
+  return { text: body.replace(/\r\n?/g, "\n"), eol: body.includes("\r\n") ? "\r\n" : "\n", bom };
+}
+
+/** File content to write for a buffer. */
+export const encodeText = (b: Pick<Buf, "text" | "eol" | "bom">) =>
+  (b.bom ? "\uFEFF" : "") + (b.eol === "\n" ? b.text : b.text.replace(/\n/g, b.eol));
 
 /**
  * changed — semantic differences; reordered — same content, different text;
@@ -72,4 +89,20 @@ export function minimalEdit(from: string, to: string) {
   let s = 0;
   while (s < max - p && from[from.length - 1 - s] === to[to.length - 1 - s]) s++;
   return { from: p, to: from.length - s, insert: to.slice(p, to.length - s) };
+}
+
+/**
+ * Store an editor's text in the entry's buffer for `side`. A side without a
+ * buffer gets one only when there is text and a directory to create the file
+ * in (typing into a file that exists only on the other side).
+ */
+export function storeEditorText(e: Entry, side: Side, text: string, dirRoot: string | null): void {
+  const buf = e[side];
+  if (buf) {
+    buf.text = text;
+    return;
+  }
+  if (text === "" || dirRoot === null) return;
+  const other = e[otherSide(side)];
+  e[side] = { path: joinPath(dirRoot, e.rel), saved: "", text, exists: false, eol: other?.eol ?? "\n", bom: other?.bom ?? false };
 }
