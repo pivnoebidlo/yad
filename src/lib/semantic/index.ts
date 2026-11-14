@@ -7,6 +7,7 @@ export * from "./types";
 export { defaultOptions, DEFAULT_IGNORE, DEFAULT_MERGE_KEYS } from "./config";
 export { formatPath, locatePath } from "./util";
 export { renderNormalized, normalizeResource, type NormalizedView } from "./normalize";
+export { planApply, applyEdits, type ApplyItem, type ApplyResult, type Direction, type Edit } from "./patch";
 
 const sortKey = (r: ResourceDiff) => {
   const id = (r.a ?? r.b)!.id;

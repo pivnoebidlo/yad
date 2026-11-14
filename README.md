@@ -1,6 +1,10 @@
-# yad
+# yad — Yet Another Diff
 
-Diff tool for YAML/JSON, focused on Kubernetes manifests.
+*(a.k.a. YAML Ain't Different)*
+
+Diff tool for YAML/JSON, focused on Kubernetes manifests: compares files or
+whole directories semantically (key order, list order and server noise do not
+matter) and applies changes from one side to the other with arrows.
 Stack: Tauri 2 (Rust) + Svelte 5 + CodeMirror 6.
 
 ## Requirements
@@ -19,14 +23,15 @@ npm run check          # type check
 npm test               # unit tests (semantic engine)
 ```
 
-Run with files: `yad.app/Contents/MacOS/yad left.yaml right.yaml`
+Run with files or folders: `yad.app/Contents/MacOS/yad left.yaml right.yaml`, `… stage/ prod/`
 
 ## Shortcuts
 
 | Key | Action |
 |---|---|
-| ⌘O / ⇧⌘O | Open left / right |
-| ⌘S | Save focused side (⇧⌘S — both) |
+| ⌘O / ⇧⌘O | Open file left / right (add ⌥ for a folder) |
+| ⌘S | Save focused side (⇧⌘S — all changed files) |
+| ⌥⌘↓ / ⌥⌘↑ | Next / previous file (folder mode) |
 | ⌘1 / ⌘2 | Text mode (original, editable) / Semantic mode (normalized) |
 | ⌘B | Toggle changes panel |
 | ⌥↓ / ⌥↑ | Next / previous difference |

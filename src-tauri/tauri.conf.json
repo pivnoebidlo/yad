@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "yad",
+        "title": "yad \u2014 Yet Another Diff",
         "width": 1400,
         "height": 900,
         "minWidth": 800,

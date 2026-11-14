@@ -53,7 +53,7 @@ export function parseResources(text: string): { resources: Resource[]; errors: P
   };
 
   list.forEach((doc, docIndex) => {
-    const ctx: SourceCtx = { doc, lc };
+    const ctx: SourceCtx = { doc, lc, text };
     for (const e of doc.errors)
       errors.push({ message: e.message, line: lc.linePos(e.pos[0]).line });
     const root = deref(doc.contents, ctx);

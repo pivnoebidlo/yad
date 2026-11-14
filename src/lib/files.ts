@@ -17,3 +17,12 @@ export function langFor(path: string | null): Lang {
 }
 
 export const baseName = (path: string) => path.split(/[\\/]/).pop() ?? path;
+
+export const pathKind = (path: string) => invoke<"file" | "dir" | "missing">("path_kind", { path });
+export const listFiles = (root: string) => invoke<string[]>("list_files", { root });
+
+/** Join a root directory and a `/`-separated relative path. */
+export function joinPath(root: string, rel: string): string {
+  const sep = root.includes("\\") && !root.includes("/") ? "\\" : "/";
+  return root.replace(/[\\/]+$/, "") + sep + rel.split("/").join(sep);
+}

@@ -210,6 +210,21 @@ describe("NormalizedView.locate", () => {
   });
 });
 
+describe("NormalizedView.pathAt", () => {
+  it("maps a position in normalized text back to resource and path", () => {
+    const res = compareTexts(fixture("manifest.yaml"), fixture("live.yaml"));
+    const view = renderNormalized(res.resources, defaultOptions());
+    const at = (side: "a" | "b", needle: string) => {
+      const p = view.pathAt(side, view[side].indexOf(needle) + 2)!;
+      return `${p.key} ${formatPath(p.path)}`;
+    };
+    expect(at("b", "registry.local/web:1.5.0")).toBe("apps/Deployment//web spec.template.spec.containers[web].image");
+    expect(at("a", "value: info")).toBe("apps/Deployment//web spec.template.spec.containers[web].env[LOG_LEVEL].value");
+    expect(at("a", "targetPort")).toBe("/Service//web spec.ports[80].targetPort");
+    expect(at("a", "# Service web")).toBe("/Service//web ");
+  });
+});
+
 describe("formatPath", () => {
   it("formats keys, indexes and keyed items", () => {
     expect(

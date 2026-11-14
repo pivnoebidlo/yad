@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Read a text file. Errors are returned as strings to the frontend.
 #[tauri::command]
@@ -6,10 +6,66 @@ fn read_text(path: String) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))
 }
 
-/// Write a text file, replacing its contents.
+/// Write a text file, replacing its contents. Missing parent directories
+/// are created (a file copied into a directory that does not have it yet).
 #[tauri::command]
 fn write_text(path: String, contents: String) -> Result<(), String> {
+    if let Some(parent) = Path::new(&path).parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    }
     std::fs::write(&path, contents).map_err(|e| format!("{path}: {e}"))
+}
+
+/// "file", "dir" or "missing".
+#[tauri::command]
+fn path_kind(path: String) -> &'static str {
+    match std::fs::metadata(&path) {
+        Ok(m) if m.is_dir() => "dir",
+        Ok(_) => "file",
+        Err(_) => "missing",
+    }
+}
+
+const MAX_FILES: usize = 5000;
+
+fn is_manifest(p: &Path) -> bool {
+    matches!(
+        p.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref(),
+        Some("yaml" | "yml" | "json")
+    )
+}
+
+fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.') || name == "node_modules" {
+            continue;
+        }
+        let path = entry.path();
+        let ft = entry.file_type()?;
+        if ft.is_dir() {
+            walk(root, &path, out)?;
+        } else if ft.is_file() && is_manifest(&path) {
+            if out.len() >= MAX_FILES {
+                return Err(std::io::Error::other(format!("more than {MAX_FILES} files")));
+            }
+            let rel = path.strip_prefix(root).unwrap_or(&path);
+            out.push(rel.to_string_lossy().replace('\\', "/"));
+        }
+    }
+    Ok(())
+}
+
+/// YAML/JSON files under `root`, as sorted `/`-separated relative paths.
+/// Hidden entries and `node_modules` are skipped.
+#[tauri::command]
+fn list_files(root: String) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    walk(Path::new(&root), Path::new(&root), &mut out).map_err(|e| format!("{root}: {e}"))?;
+    out.sort();
+    Ok(out)
 }
 
 /// Paths passed on the command line (`yad left.yaml right.yaml`),
@@ -34,7 +90,7 @@ fn initial_paths() -> Vec<String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![read_text, write_text, initial_paths])
+        .invoke_handler(tauri::generate_handler![read_text, write_text, path_kind, list_files, initial_paths])
         .run(tauri::generate_context!())
         .expect("error while running yad");
 }

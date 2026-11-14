@@ -53,6 +53,38 @@ export interface NormalizedView {
   b: string;
   /** Range of a resource (or a path inside it) in the normalized text of one side. */
   locate(side: "a" | "b", resourceKey: string, path?: PathSeg[]): SourceRange | undefined;
+  /** Resource and path of the deepest node at `offset` in one side's normalized text. */
+  pathAt(side: "a" | "b", offset: number): { key: string; path: PathSeg[] } | undefined;
+}
+
+function pathInside(root: Node, offset: number, ctx: SourceCtx, opts: CompareOptions): PathSeg[] {
+  const path: PathSeg[] = [];
+  let node: Node | null = root;
+  const contains = (from: number, to: number) => offset >= from && offset <= to;
+  for (;;) {
+    if (isMap(node)) {
+      const pair = (node.items as Pair[]).find((p) => {
+        const k = (p.key as Node).range!, v = (p.value as Node | null)?.range;
+        return contains(k[0], v ? v[1] : k[1]);
+      });
+      if (!pair) break;
+      path.push(keyString(pair));
+      node = deref(pair.value, ctx);
+    } else if (isSeq(node)) {
+      const seq: typeof node = node;
+      const i = seq.items.findIndex((it) => {
+        const r = (it as Node).range;
+        return r && contains(r[0], r[1]);
+      });
+      if (i < 0) break;
+      const item = deref(seq.items[i], ctx);
+      const mk = pickMergeKey(fieldName(path), [{ items: seq.items, ctx }], opts);
+      const v = mk && isMap(item) ? getScalar(item, mk, ctx) : undefined;
+      path.push(mk && v !== undefined ? { key: mk, value: v } : i);
+      node = item;
+    } else break;
+  }
+  return path;
 }
 
 /**
@@ -81,7 +113,7 @@ export function renderNormalized(resources: ResourceDiff[], opts: CompareOptions
     const docs = parseAllDocuments(side === "a" ? a : b, { lineCounter: lc });
     const m = new Map<string, { node: Node; ctx: SourceCtx }>();
     (Array.isArray(docs) ? docs : []).forEach((doc, i) => {
-      if (doc.contents && keys[side][i] !== undefined) m.set(keys[side][i], { node: doc.contents as Node, ctx: { doc, lc } });
+      if (doc.contents && keys[side][i] !== undefined) m.set(keys[side][i], { node: doc.contents as Node, ctx: { doc, lc, text: side === "a" ? a : b } });
     });
     return m;
   };
@@ -92,6 +124,18 @@ export function renderNormalized(resources: ResourceDiff[], opts: CompareOptions
     locate(side, resourceKey, path = []) {
       const entry = (index[side] ??= build(side)).get(resourceKey);
       return entry && locatePath(entry.node, path, entry.ctx);
+    },
+    pathAt(side, offset) {
+      // Last document starting at or before the offset (a document includes
+      // its `# Kind name` header comment).
+      let best: { key: string; node: Node; ctx: SourceCtx } | undefined;
+      for (const [key, e] of (index[side] ??= build(side))) {
+        const start = e.ctx.doc.range?.[0] ?? e.node.range?.[0] ?? 0;
+        if (!best || start <= offset) best = { key, ...e };
+        else break;
+      }
+      if (!best) return undefined;
+      return { key: best.key, path: pathInside(best.node, offset, best.ctx, opts) };
     },
   };
 }
