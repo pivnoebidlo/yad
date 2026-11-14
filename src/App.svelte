@@ -374,6 +374,39 @@
     if (!rewriteSide(side, r.text, `⇅ ${t("opAlign")}`)) await message(t("orderMatches"), { title: t("align"), kind: "info" });
   }
 
+  /** Format or align every file on one side (directory mode); one History step per file. */
+  async function bulk(kind: "format" | "align", side: Side) {
+    flushSemantic();
+    const label = kind === "format" ? `✨ ${t("opFormat")}` : `⇅ ${t("opAlign")}`;
+    const fo = formatOptions();
+    let changed = 0;
+    const skipped: string[] = [];
+    for (const e of entries) {
+      const buf = e[side];
+      const other = e[otherSide(side)];
+      if (!buf || (kind === "align" && !other)) continue;
+      const isCurrent = e === entries[current];
+      const before = isCurrent ? raw.getDoc(side) : buf.text;
+      if (!before.trim()) continue;
+      const r = kind === "format" ? formatText(before, fo) : alignOrder(before, isCurrent ? raw.getDoc(otherSide(side)) : other!.text, opts);
+      if (r.error !== undefined) {
+        skipped.push(`${e.rel}: ${r.error}`);
+        continue;
+      }
+      if (r.text === before) continue;
+      changed++;
+      if (isCurrent) rewriteSide(side, r.text, label);
+      else {
+        record({ rel: e.rel, side, label, before, after: r.text, anchor: 0 });
+        buf.text = r.text;
+        e.status = statusOf(e, undefined, opts);
+      }
+    }
+    const lines = [changed ? `${tn("bulkDone", changed)} ${t("bulkUnsaved", { key: formatCombo(settings.hotkeys.saveAll || "Mod+Shift+S") })}` : t("bulkNothing")];
+    if (skipped.length) lines.push("", t("bulkSkipped"), ...skipped.slice(0, 20), ...(skipped.length > 20 ? ["…"] : []));
+    await message(lines.join("\n"), { title: kind === "format" ? t("format") : label, kind: skipped.length ? "warning" : "info" });
+  }
+
   /** "Kubernetes", "GitHub Actions · JSON", … for a side's header. */
   function kindBadge(side: Side): string {
     const text = entry?.[side]?.text;
@@ -633,7 +666,7 @@
       <aside style="width: {layout.width}px">
         {#if dirMode}
           <Section title={t("files")} badge={entries.length} collapsed={c.files} ontoggle={() => toggle("files")} style={paneStyle("files", layout.files)}>
-            <FileList bind:this={fileList} {entries} {current} onselect={selectEntry} />
+            <FileList bind:this={fileList} {entries} {current} onselect={selectEntry} onbulk={bulk} />
           </Section>
           {#if !c.files && !c.changes}
             <Splitter ondrag={(d) => (layout.files = clamp(layout.files + d, 60, window.innerHeight - 200))} />
