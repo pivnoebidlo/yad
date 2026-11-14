@@ -7,7 +7,7 @@
   import { ACTIONS, DEFAULT_HOTKEYS, actionFor, comboOf, formatCombo, keyOf, type ActionId } from "./hotkeys";
   import { parsePath } from "./semantic";
 
-  type Tab = "general" | "comparison" | "hotkeys" | "about";
+  type Tab = "general" | "comparison" | "formatting" | "hotkeys" | "about";
 
   interface Props {
     tab?: Tab;
@@ -96,7 +96,7 @@
     ({ system: t("themeSystem"), light: t("themeLight"), dark: t("themeDark"), oldschool: t("themeOldschool") })[th];
   const languages: Language[] = ["system", "en", "ru"];
   const languageLabel = (l: Language) => ({ system: t("languageSystem"), en: "English", ru: "Русский" })[l];
-  const tabs: Tab[] = ["general", "comparison", "hotkeys", "about"];
+  const tabs: Tab[] = ["general", "comparison", "formatting", "hotkeys", "about"];
 </script>
 
 <svelte:window onkeydowncapture={onkey} />
@@ -133,6 +133,23 @@
         <div><button onclick={resetIgnore}>{t("resetDefaults")}</button></div>
         <label class="check top"><input type="checkbox" bind:checked={settings.emptyEqualsMissing} /> {t("emptyEqualsMissing")}</label>
         <p class="hint">{t("emptyEqualsMissingHint")}</p>
+      {:else if tab === "formatting"}
+        <p class="hint">{t("formatHint")}</p>
+        <label class="field">
+          <span>{t("indentSize")}</span>
+          <select bind:value={settings.formatIndent}>
+            {#each [2, 4] as n}<option value={n}>{t("indentSpaces", { n })}</option>{/each}
+          </select>
+        </label>
+        <label class="field">
+          <span>{t("seqStyle")}</span>
+          <select bind:value={settings.formatIndentSeq}>
+            <option value={true}>{t("seqIndented").replace("\n", " ")}</option>
+            <option value={false}>{t("seqFlush").replace("\n", " ")}</option>
+          </select>
+        </label>
+        <label class="check top"><input type="checkbox" bind:checked={settings.formatSortK8s} /> {t("sortK8sKeys")}</label>
+        <p class="hint">{t("sortK8sKeysHint")}</p>
       {:else if tab === "hotkeys"}
         <p class="hint">{t("hotkeyHint")}</p>
         <div class="keys">

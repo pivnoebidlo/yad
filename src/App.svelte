@@ -12,7 +12,7 @@
   import Section from "./lib/Section.svelte";
   import Splitter from "./lib/Splitter.svelte";
   import Settings from "./lib/Settings.svelte";
-  import { settings, compareOptions, effectiveTheme } from "./lib/prefs.svelte";
+  import { settings, compareOptions, effectiveTheme, formatOptions } from "./lib/prefs.svelte";
   import { t, tn } from "./lib/i18n.svelte";
   import { actionFor, comboOf, formatCombo, type ActionId } from "./lib/hotkeys";
   import {
@@ -22,7 +22,7 @@
     decodeText, encodeText, isDirty, minimalEdit, otherSide, statusOf, storeEditorText, type Buf, type Entry, type Marker, type Op,
   } from "./lib/workspace";
   import {
-    applyEdits, compareTexts, formatPath, locatePath, planApply, planRevert, planSemanticEdit, renderNormalized, shortPath,
+    alignOrder, applyEdits, compareTexts, formatText, isJsonText, KIND_LABELS, formatPath, pathOn, locatePath, planApply, planRevert, planSemanticEdit, renderNormalized, shortPath,
     type ApplyItem, type Change, type CompareResult, type Direction, type NormalizedView,
     type ResourceDiff, type SourceRange, type Touched,
   } from "./lib/semantic";
@@ -93,7 +93,7 @@
   });
 
   let settingsOpen = $state(false);
-  let settingsTab = $state<"general" | "comparison" | "hotkeys" | "about">("general");
+  let settingsTab = $state<"general" | "comparison" | "formatting" | "hotkeys" | "about">("general");
   /** " (⌘S)" for tooltips, following the current bindings. */
   const hk = (a: ActionId) => (settings.hotkeys[a] ? ` (${formatCombo(settings.hotkeys[a])})` : "");
 
@@ -283,7 +283,7 @@
     if (after !== before) {
       const touched: Touched[] = items.map(({ resource: r, change: c }) => ({
         key: (r[target] ?? r[otherSide(target)])!.key,
-        path: c?.path,
+        path: c && pathOn(c, target),
       }));
       record({ rel: entries[current]?.rel ?? "", side: target, label: describe(items, dir), before: existed ? before : null, after, touched });
     }
@@ -347,6 +347,40 @@
       const anchor = target === "b" ? chunk.fromB : chunk.fromA;
       record({ rel: entries[current]?.rel ?? "", side: target, label: `${dir === "a-to-b" ? "→" : "←"} ${t("textBlock")}`, before, after, anchor });
     }
+  }
+
+  /** Replace one side's whole text as a single undoable, recorded step. */
+  function rewriteSide(side: Side, next: string, label: string) {
+    const before = raw.getDoc(side);
+    if (next === before) return false;
+    const existed = !!entries[current]?.[side];
+    raw.applyEdits(side, [minimalEdit(before, next)]);
+    record({ rel: entries[current]?.rel ?? "", side, label, before: existed ? before : null, after: raw.getDoc(side), anchor: 0 });
+    recompute();
+    return true;
+  }
+
+  async function formatSide(side: Side) {
+    flushSemantic();
+    const r = formatText(raw.getDoc(side), formatOptions());
+    if (r.error !== undefined) return message(r.error, { title: t("cannotFormat"), kind: "warning" });
+    if (!rewriteSide(side, r.text, `✨ ${t("opFormat")}`)) await message(t("alreadyFormatted"), { title: t("format"), kind: "info" });
+  }
+
+  async function alignSide(side: Side) {
+    flushSemantic();
+    const r = alignOrder(raw.getDoc(side), raw.getDoc(otherSide(side)), opts);
+    if (r.error !== undefined) return message(r.error, { title: t("cannotAlign"), kind: "warning" });
+    if (!rewriteSide(side, r.text, `⇅ ${t("opAlign")}`)) await message(t("orderMatches"), { title: t("align"), kind: "info" });
+  }
+
+  /** "Kubernetes", "GitHub Actions · JSON", … for a side's header. */
+  function kindBadge(side: Side): string {
+    const text = entry?.[side]?.text;
+    if (!text?.trim()) return "";
+    const kinds = [...new Set(result?.resources.map((r) => r[side]?.docKind).filter(Boolean))];
+    const label = kinds.length === 1 ? KIND_LABELS[kinds[0]!] : kinds.length > 1 ? KIND_LABELS.yaml : "";
+    return isJsonText(text) ? (label && label !== "YAML" ? `${label} · JSON` : "JSON") : label;
   }
 
   /** Keep text-copy anchors in place while the document is edited. */
@@ -431,8 +465,8 @@
         continue;
       }
       for (const c of r.changes) {
-        const inA = c.kind !== "added" && hit(normalized.locate("a", r.key, c.path), chunk.fromA, chunk.toA);
-        const inB = c.kind !== "removed" && hit(normalized.locate("b", r.key, c.path), chunk.fromB, chunk.toB);
+        const inA = c.kind !== "added" && hit(normalized.locate("a", r.key, pathOn(c, "a")), chunk.fromA, chunk.toA);
+        const inB = c.kind !== "removed" && hit(normalized.locate("b", r.key, pathOn(c, "b")), chunk.fromB, chunk.toB);
         if (inA || inB) items.push({ resource: r, change: c });
       }
     }
@@ -448,7 +482,7 @@
   function sourceSpans(r: ResourceDiff, c: Change): Partial<Record<Side, Span>> {
     const near = (side: Side) => {
       const res = r[side];
-      return res && point(locatePath(res.node, c.path, res.ctx));
+      return res && point(locatePath(res.node, pathOn(c, side), res.ctx));
     };
     return { a: span(c.aRange) ?? near("a"), b: span(c.bRange) ?? near("b") };
   }
@@ -463,7 +497,7 @@
     if (mode === "semantic" && normalized) {
       const loc = (side: Side) => {
         const has = side === "a" ? c.kind !== "added" : c.kind !== "removed";
-        const l = normalized!.locate(side, r.key, c.path);
+        const l = normalized!.locate(side, r.key, pathOn(c, side));
         return has ? span(l) : point(l);
       };
       sem.select({ a: loc("a"), b: loc("b") }, c.kind === "removed" ? "a" : "b");
@@ -642,6 +676,10 @@
                 <small>{src.path}</small>
               {/if}
             </span>
+            {#if kindBadge(side)}<span class="badge" title={kindBadge(side)}>{kindBadge(side)}</span>{/if}
+            <button onclick={() => formatSide(side)} disabled={!buf} title={t("formatTitle")}>{t("format")}</button>
+            <button onclick={() => alignSide(side)} disabled={!buf || !entry?.[otherSide(side)]}
+              title={side === "a" ? t("alignTitleRight") : t("alignTitleLeft")}>{t("align")}</button>
             <button onclick={() => save(side)} disabled={!isDirty(buf)} title={t("saveTitle") + hk("save")}>{t("save")}</button>
           </div>
         {/each}
@@ -705,6 +743,8 @@
   .pane { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--panel); min-width: 0; transition: background 0.1s; }
   .pane.drop { background: var(--accent-soft); outline: 2px dashed var(--accent); outline-offset: -3px; }
   .open { display: flex; gap: 4px; }
+  .badge { flex: none; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px;
+    padding: 1px 6px; border: 1px solid var(--border); border-radius: 10px; color: var(--muted); }
   .path { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.2; }
   .path b, .path small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .path small, .path i { color: var(--muted); font-size: 11px; }

@@ -1,5 +1,6 @@
 import { LineCounter, isMap, isScalar, isSeq, parseAllDocuments, stringify, type Node, type Pair } from "yaml";
 import { KEY_PRIORITY } from "./config";
+import { optionsForKind } from "./kinds";
 import type { CompareOptions, PathSeg, Resource, ResourceDiff, SourceCtx, SourceRange } from "./types";
 import { deref, fieldName, getScalar, isEmptyAfterIgnore, isIgnored, keyString, locatePath, pickMergeKey, toJS } from "./util";
 
@@ -44,8 +45,8 @@ function canonical(n0: unknown, ctx: SourceCtx, path: PathSeg[], opts: CompareOp
 }
 
 export function normalizeResource(r: Resource, opts: CompareOptions): string {
-  const ignore = r.id ? opts.ignore : [];
-  return stringify(canonical(r.node, r.ctx, [], opts, ignore), { lineWidth: 0, indentSeq: true });
+  const o = optionsForKind(r.docKind, opts);
+  return stringify(canonical(r.node, r.ctx, [], o, o.ignore), { lineWidth: 0, indentSeq: true });
 }
 
 export interface NormalizedView {
@@ -103,6 +104,7 @@ export function renderNormalized(resources: ResourceDiff[], opts: CompareOptions
       keys[side].push(r.key);
     }
   }
+  const kinds = new Map(resources.map((r) => [r.key, (r.a ?? r.b)!.docKind]));
   const a = parts.a.join("---\n");
   const b = parts.b.join("---\n");
 
@@ -135,7 +137,7 @@ export function renderNormalized(resources: ResourceDiff[], opts: CompareOptions
         else break;
       }
       if (!best) return undefined;
-      return { key: best.key, path: pathInside(best.node, offset, best.ctx, opts) };
+      return { key: best.key, path: pathInside(best.node, offset, best.ctx, optionsForKind(kinds.get(best.key) ?? "yaml", opts)) };
     },
   };
 }

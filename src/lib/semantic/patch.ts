@@ -5,7 +5,8 @@
  */
 import { isCollection, isMap, isScalar, isSeq, type Node, type Pair, type YAMLMap, type YAMLSeq } from "yaml";
 import type { Change, PathSeg, Resource, ResourceDiff, SourceCtx } from "./types";
-import { deref, getPair, getScalar, keyString, toJS } from "./util";
+import { anchorIndex, canonicalString, deref, getPair, getScalar, keyString, pathOn, toJS } from "./util";
+import { isJsonText, planApplyJson } from "./json";
 
 export type Direction = "a-to-b" | "b-to-a";
 
@@ -221,8 +222,10 @@ function insert(src: Loc, s: SourceCtx, dLoc: Loc, d: SourceCtx, seg: PathSeg): 
 
   let after: number | undefined, before: number | undefined;
   if (typeof seg === "number") {
-    if (seg < dParent.items.length) before = seg;
-    else after = dParent.items.length - 1;
+    // Unkeyed list: place it next to the same neighbours as in the source.
+    const keys = (seq: YAMLSeq, ctx: SourceCtx) => seq.items.map((n) => canonicalString(toJS(deref(n, ctx), ctx)));
+    ({ after, before } = anchorIndex(keys(sParent as YAMLSeq, s), si, keys(dParent as YAMLSeq, d)));
+    if (before !== undefined && before >= dParent.items.length) { after = dParent.items.length - 1; before = undefined; }
   } else {
     for (let k = si - 1; k >= 0 && after === undefined; k--) after = dIndex.get(idOf(sParent, k, s) ?? "\0");
     for (let k = si + 1; k < sParent.items.length && after === undefined && before === undefined; k++)
@@ -287,21 +290,38 @@ function removeResource(r: Resource): Edit | string {
 
 // ---- public API -----------------------------------------------------------------
 
-function changeEdit(r: ResourceDiff, c: Change, dir: Direction): Edit | string | null {
+function changeEdit(r: ResourceDiff, c: Change, dir: Direction): Edit | Edit[] | string | null {
   const [sr, dr] = dir === "a-to-b" ? [r.a, r.b] : [r.b, r.a];
   if (!sr || !dr) return "resource is missing on one side";
+  const srcSide = dir === "a-to-b" ? "a" : "b";
+  const dstSide = dir === "a-to-b" ? "b" : "a";
+  const srcPath = pathOn(c, srcSide);
+  const dstPath = pathOn(c, dstSide);
+
+  if (c.kind === "moved") {
+    // Take the item out of its place in the target and put it where the
+    // source has it.
+    const src = resolve(sr.node, srcPath, sr.ctx);
+    const dst = resolve(dr.node, dstPath, dr.ctx);
+    if (!src || !dst?.parent) return "path not found";
+    const srcIdx = srcPath[srcPath.length - 1] as number;
+    const dstIdx = dstPath[dstPath.length - 1] as number;
+    const del = remove(dst, dr.ctx, dstIdx);
+    const ins = insert(src, sr.ctx, { node: dst.parent }, dr.ctx, srcIdx);
+    return typeof ins === "string" ? ins : [del, ins];
+  }
+
   const srcHas = dir === "a-to-b" ? c.kind !== "added" : c.kind !== "removed";
   const dstHas = dir === "a-to-b" ? c.kind !== "removed" : c.kind !== "added";
-  const seg = c.path[c.path.length - 1];
-  const src = srcHas ? resolve(sr.node, c.path, sr.ctx) : null;
-  const dst = dstHas ? resolve(dr.node, c.path, dr.ctx) : null;
+  const src = srcHas ? resolve(sr.node, srcPath, sr.ctx) : null;
+  const dst = dstHas ? resolve(dr.node, dstPath, dr.ctx) : null;
   if ((srcHas && !src) || (dstHas && !dst)) return "path not found";
   if (src && dst) return replace(src, sr.ctx, dst, dr.ctx);
-  if (dst) return dst.parent ? remove(dst, dr.ctx, seg) : "cannot remove the root";
+  if (dst) return dst.parent ? remove(dst, dr.ctx, dstPath[dstPath.length - 1]) : "cannot remove the root";
   if (src) {
-    const parent = resolve(dr.node, c.path.slice(0, -1), dr.ctx);
+    const parent = resolve(dr.node, dstPath.slice(0, -1), dr.ctx);
     if (!parent) return "parent path not found on the target side";
-    return insert(src, sr.ctx, parent, dr.ctx, seg);
+    return insert(src, sr.ctx, parent, dr.ctx, srcPath[srcPath.length - 1]);
   }
   return null;
 }
@@ -311,12 +331,14 @@ function changeEdit(r: ResourceDiff, c: Change, dir: Direction): Edit | string |
  * changes/resources. `dir` "a-to-b" copies left → right (edits apply to `b`).
  */
 export function planApply(items: ApplyItem[], dir: Direction, targetText: string): ApplyResult {
+  if (isJsonText(targetText)) return planApplyJson(items, dir, targetText);
   const side = dir === "a-to-b" ? "b" : "a";
   const edits: Edit[] = [];
   const errors: string[] = [];
   const appended: string[] = [];
-  const push = (e: Edit | string | null, what: string) => {
+  const push = (e: Edit | Edit[] | string | null, what: string) => {
     if (typeof e === "string") errors.push(`${what}: ${e}`);
+    else if (Array.isArray(e)) edits.push(...e);
     else if (e) edits.push(e);
   };
 

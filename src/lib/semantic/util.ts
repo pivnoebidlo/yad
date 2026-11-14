@@ -185,3 +185,34 @@ export function parsePath(text: string): string[] | null {
   }
   return out;
 }
+
+/** Where a change lives on one side (see Change.aPath / bPath). */
+export const pathOn = (c: { path: PathSeg[]; aPath?: PathSeg[]; bPath?: PathSeg[] }, side: "a" | "b"): PathSeg[] =>
+  (side === "a" ? c.aPath : c.bPath) ?? c.path;
+
+/** Smallest single edit turning `from` into `to` (common prefix/suffix kept). */
+export function minimalEdit(from: string, to: string) {
+  let p = 0;
+  const max = Math.min(from.length, to.length);
+  while (p < max && from[p] === to[p]) p++;
+  let s = 0;
+  while (s < max - p && from[from.length - 1 - s] === to[to.length - 1 - s]) s++;
+  return { from: p, to: from.length - s, insert: to.slice(p, to.length - s) };
+}
+
+/**
+ * Where to put source list item `si` in a target list, by its neighbours:
+ * after the target copy of the nearest preceding source item, else before the
+ * copy of the nearest following one, else at the start / end.
+ */
+export function anchorIndex(src: string[], si: number, dst: string[]): { after?: number; before?: number } {
+  for (let k = si - 1; k >= 0; k--) {
+    const i = dst.indexOf(src[k]);
+    if (i >= 0) return { after: i };
+  }
+  for (let k = si + 1; k < src.length; k++) {
+    const i = dst.indexOf(src[k]);
+    if (i >= 0) return { before: i };
+  }
+  return si === 0 || !dst.length ? { before: 0 } : { after: dst.length - 1 };
+}

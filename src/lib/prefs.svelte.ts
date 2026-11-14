@@ -1,6 +1,6 @@
 /** User settings, persisted in the webview's localStorage. */
 import { DEFAULT_HOTKEYS, ACTIONS, type ActionId } from "./hotkeys";
-import { DEFAULT_IGNORE, DEFAULT_MERGE_KEYS, formatPath, parsePath, type CompareOptions } from "./semantic";
+import { DEFAULT_IGNORE, DEFAULT_MERGE_KEYS, formatPath, parsePath, type CompareOptions, type FormatOptions } from "./semantic";
 
 export type Theme = "system" | "light" | "dark" | "oldschool";
 export type Language = "system" | "en" | "ru";
@@ -16,6 +16,10 @@ export interface Settings {
   /** Ignore patterns, one per entry, in formatPath syntax. */
   ignorePaths: string[];
   emptyEqualsMissing: boolean;
+  /** Formatting ("Format" button). */
+  formatIndent: number;
+  formatIndentSeq: boolean;
+  formatSortK8s: boolean;
 }
 
 const KEY = "yad.settings";
@@ -30,6 +34,9 @@ export const defaultSettings = (): Settings => ({
   ignoreNoise: true,
   ignorePaths: defaultIgnorePaths(),
   emptyEqualsMissing: true,
+  formatIndent: 2,
+  formatIndentSeq: true,
+  formatSortK8s: true,
 });
 
 function load(): Settings {
@@ -82,4 +89,8 @@ export function compareOptions(): CompareOptions {
     fallbackMergeKeys: ["name"],
     emptyEqualsMissing: settings.emptyEqualsMissing,
   };
+}
+
+export function formatOptions(): FormatOptions {
+  return { indent: settings.formatIndent, indentSeq: settings.formatIndentSeq, sortKubernetesKeys: settings.formatSortK8s };
 }

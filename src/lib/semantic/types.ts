@@ -1,4 +1,5 @@
 import type { Document, LineCounter, Node } from "yaml";
+import type { DocKind } from "./kinds";
 
 /** One step in a path: map key, list index, or keyed list item (`containers[name=web]`). */
 export type PathSeg = string | number | { key: string; value: string };
@@ -10,7 +11,8 @@ export interface SourceRange {
   line: number;
 }
 
-export type ChangeKind = "added" | "removed" | "changed";
+/** `moved`: the same list item sits at another position (order matters in that list). */
+export type ChangeKind = "added" | "removed" | "changed" | "moved";
 
 export interface Change {
   path: PathSeg[];
@@ -21,6 +23,14 @@ export interface Change {
   b?: unknown;
   aRange?: SourceRange;
   bRange?: SourceRange;
+  /** For `moved`: index of the item on the left; the path ends with its index on the right. */
+  fromIndex?: number;
+  /**
+   * Path on the left / right side when it differs from `path` (inside unkeyed
+   * lists an item can have different indexes). Use `pathOn()`.
+   */
+  aPath?: PathSeg[];
+  bPath?: PathSeg[];
 }
 
 export interface ResourceId {
@@ -45,6 +55,8 @@ export interface Resource {
   /** Matching key: `group/kind/namespace/name`, or `#<n>` for non-k8s documents. */
   key: string;
   id: ResourceId | null;
+  /** What the document is (Kubernetes, a pipeline, …); decides the comparison rules. */
+  docKind: DocKind;
   label: string;
   node: Node;
   range: SourceRange;
