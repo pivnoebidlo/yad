@@ -1,0 +1,81 @@
+name: Release
+
+# Push a tag like v0.2.0 to build installers for all platforms and attach
+# them to a draft GitHub release. Review the draft and publish it manually.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (Apple Silicon)
+            os: macos-latest
+            args: --target aarch64-apple-darwin
+            rust-targets: aarch64-apple-darwin
+          - name: macOS (Intel)
+            os: macos-latest
+            args: --target x86_64-apple-darwin
+            rust-targets: x86_64-apple-darwin
+          - name: Linux
+            os: ubuntu-22.04
+            args: ""
+            rust-targets: ""
+          - name: Windows
+            os: windows-latest
+            args: ""
+            rust-targets: ""
+
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install system libraries for Tauri
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ${{ matrix.args }}
+
+      - run: npm ci
+      - run: npm test
+
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('v__VERSION__-{0}', github.run_number) }}
+          releaseName: yad ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__ (manual build)' }}
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
+          releaseBody: |
+            ## Downloads
+            - **macOS**: `.dmg` — `aarch64` for Apple Silicon, `x64` for Intel
+            - **Linux**: `.AppImage`, `.deb` or `.rpm`
+            - **Windows**: `.msi` or `-setup.exe`
+
+            > The macOS build is not notarized yet. After copying yad to
+            > Applications, run once:
+            > `xattr -dr com.apple.quarantine /Applications/yad.app`

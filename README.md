@@ -32,3 +32,19 @@ Run with files: `yad.app/Contents/MacOS/yad left.yaml right.yaml`
 | ⌥↓ / ⌥↑ | Next / previous difference |
 | ⌘F | Search |
 | ⌘Z / ⇧⌘Z | Undo / redo |
+
+## Releases
+
+CI (`.github/workflows/ci.yml`) runs tests, type check and build on every PR
+and push to `main`.
+
+To publish installers, bump `version` in `package.json`,
+`src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml`, then:
+
+```sh
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+`.github/workflows/release.yml` builds macOS (arm64 + x64) `.dmg`, Linux
+(`.AppImage`/`.deb`/`.rpm`) and Windows (`.msi`/`.exe`) and attaches them to a
+**draft** GitHub release — review and publish it on the Releases page.
