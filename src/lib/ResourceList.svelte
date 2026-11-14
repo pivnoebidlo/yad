@@ -1,13 +1,14 @@
 <script lang="ts">
-  import { formatPath, type Change, type CompareResult, type ResourceDiff, type ResourceStatus } from "./semantic";
+  import { formatPath, shortPath, type ApplyItem, type Change, type CompareResult, type Direction, type ResourceDiff, type ResourceStatus } from "./semantic";
 
   interface Props {
     result: CompareResult | null;
     onresource: (r: ResourceDiff) => void;
     onchange: (r: ResourceDiff, c: Change) => void;
     onedit: (r: ResourceDiff, c: Change) => void;
+    onapply: (items: ApplyItem[], dir: Direction) => void;
   }
-  let { result, onresource, onchange, onedit }: Props = $props();
+  let { result, onresource, onchange, onedit, onapply }: Props = $props();
 
   let hideEqual = $state(true);
   let collapsed = $state<Record<string, boolean>>({});
@@ -53,9 +54,9 @@
 
   <div class="items">
     {#each shown as r (r.key)}
+      <div class="res-row" class:active={active === r.key}>
       <button
         class="res s-{r.status}"
-        class:active={active === r.key}
         onclick={() => {
           active = r.key;
           if (r.changes.length) collapsed[r.key] = !collapsed[r.key];
@@ -66,6 +67,13 @@
         <span class="label" title={r.label}>{r.label}</span>
         {#if r.changes.length}<span class="count">{r.changes.length}</span>{/if}
       </button>
+      {#if r.status !== "equal"}
+        <span class="arrows res-arrows">
+          <button title={r.a ? "Make the right side match the left for this resource" : "Remove this resource from the right"} onclick={() => onapply([{ resource: r }], "a-to-b")}>→</button>
+          <button title={r.b ? "Make the left side match the right for this resource" : "Remove this resource from the left"} onclick={() => onapply([{ resource: r }], "b-to-a")}>←</button>
+        </span>
+      {/if}
+      </div>
       {#if r.changes.length && !collapsed[r.key]}
         {#each r.changes as c, i}
           <div class="change s-{c.kind}" class:active={active === changeId(r, i)}>
@@ -74,10 +82,14 @@
               title={`${formatPath(c.path)}\n${changeText(c)}`}
               onclick={() => { active = changeId(r, i); onchange(r, c); }}
             >
-              <span class="path">{formatPath(c.path)}</span>
+              <span class="path">{shortPath(c.path)}</span>
               <span class="value">{changeText(c)}</span>
             </button>
-            <button class="edit" title="Edit in source (Text mode)" onclick={() => { active = changeId(r, i); onedit(r, c); }}>✎</button>
+            <span class="arrows">
+              <button title="Apply left → right" onclick={() => onapply([{ resource: r, change: c }], "a-to-b")}>→</button>
+              <button title="Apply right → left" onclick={() => onapply([{ resource: r, change: c }], "b-to-a")}>←</button>
+              <button title="Show in Source" onclick={() => { active = changeId(r, i); onedit(r, c); }}>✎</button>
+            </span>
           </div>
         {/each}
       {/if}
@@ -103,10 +115,13 @@
   .change-main { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 3px 4px; }
   .change .path, .change .value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
   .change .value { color: var(--muted); }
-  .edit { padding: 2px 8px; opacity: 0; color: var(--muted); }
-  .change:hover .edit, .change.active .edit { opacity: 1; }
-  .edit:hover { color: var(--accent); }
-  .res:hover, .change:hover { background: var(--hover); }
+  .res-row { display: flex; align-items: center; }
+  .res-row .res { flex: 1; min-width: 0; }
+  .arrows { display: flex; gap: 2px; padding-right: 6px; opacity: 0; }
+  .change:hover .arrows, .change.active .arrows, .res-row:hover .arrows, .res-row.active .arrows { opacity: 1; }
+  .arrows button { padding: 0 5px; border-radius: 4px; color: var(--muted); font-size: 12px; }
+  .arrows button:hover { background: var(--accent); color: white; }
+  .res-row:hover, .change:hover { background: var(--hover); }
   .active { background: var(--accent-soft) !important; }
   .s-changed .icon, .s-changed.change .path, .summary .s-changed { color: var(--changed); }
   .s-added .icon, .s-added.change .path, .summary .s-added { color: var(--added); }

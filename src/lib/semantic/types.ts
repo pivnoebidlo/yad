@@ -37,6 +37,8 @@ export interface ResourceId {
 export interface SourceCtx {
   doc: Document.Parsed;
   lc: LineCounter;
+  /** The full source text the document was parsed from. */
+  text: string;
 }
 
 export interface Resource {

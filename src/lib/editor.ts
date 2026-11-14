@@ -1,7 +1,7 @@
 // Minimal CodeMirror setup: only what a diff editor needs, to keep the bundle small.
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import {
-  EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter,
+  EditorView, type ViewUpdate, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter,
   drawSelection, highlightSpecialChars, rectangularSelection, crosshairCursor,
 } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
@@ -23,17 +23,19 @@ export const themeExt = (dark: boolean): Extension => (dark ? oneDark : []);
 export function baseSetup(opts: {
   language: Compartment;
   theme: Compartment;
+  history: Compartment;
   lang: Lang;
   dark: boolean;
   readonly?: boolean;
   onChange?: () => void;
+  onUpdate?: (u: ViewUpdate) => void;
 }): Extension {
   return [
     opts.readonly ? EditorState.readOnly.of(true) : [],
     lineNumbers(),
     highlightActiveLineGutter(),
     highlightSpecialChars(),
-    history(),
+    opts.history.of(history()),
     foldGutter(),
     drawSelection(),
     EditorState.allowMultipleSelections.of(true),
@@ -51,6 +53,7 @@ export function baseSetup(opts: {
     opts.language.of(languageExt(opts.lang)),
     opts.theme.of(themeExt(opts.dark)),
     EditorView.updateListener.of((u) => {
+      opts.onUpdate?.(u);
       if (u.docChanged) opts.onChange?.();
     }),
   ];
