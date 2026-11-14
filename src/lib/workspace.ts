@@ -1,4 +1,4 @@
-import { compareTexts, type CompareResult } from "./semantic";
+import { compareTexts, type CompareResult, type Touched } from "./semantic";
 import type { Side } from "./files";
 
 /** In-memory copy of a file; `exists` is false for a file not yet written. */
@@ -37,3 +37,19 @@ export function statusOf(e: Entry, result?: CompareResult): FileStatus {
 }
 
 export const otherSide = (s: Side): Side => (s === "a" ? "b" : "a");
+
+/** One apply (arrow click), kept so it can be undone selectively later. */
+export interface Op {
+  id: number;
+  /** Entry the apply happened in (relative path, "" for two files). */
+  rel: string;
+  /** Side whose text was changed. */
+  side: Side;
+  label: string;
+  /** Target text right before the apply; null if the file did not exist. */
+  before: string | null;
+  /** Target text right after it. */
+  after: string;
+  /** Semantic paths touched; absent for plain text block copies. */
+  touched?: Touched[];
+}

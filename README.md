@@ -1,6 +1,6 @@
-# yad — Yet Another Diff
+# YAD — YAML Ain't Different
 
-*(a.k.a. YAML Ain't Different)*
+A recursive acronym (and «яд», "poison", in Russian).
 
 Diff tool for YAML/JSON, focused on Kubernetes manifests: compares files or
 whole directories semantically (key order, list order and server noise do not
@@ -23,7 +23,7 @@ npm run check          # type check
 npm test               # unit tests (semantic engine)
 ```
 
-Run with files or folders: `yad.app/Contents/MacOS/yad left.yaml right.yaml`, `… stage/ prod/`
+Run with files or folders: `YAD.app/Contents/MacOS/YAD left.yaml right.yaml`, `… stage/ prod/`
 
 ## Shortcuts
 

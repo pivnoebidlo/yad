@@ -7,14 +7,15 @@
   import DiffView from "./lib/DiffView.svelte";
   import ResourceList from "./lib/ResourceList.svelte";
   import FileList from "./lib/FileList.svelte";
+  import HistoryList from "./lib/HistoryList.svelte";
   import {
     readText, writeText, initialPaths, baseName, pathKind, listFiles, joinPath, type Side,
   } from "./lib/files";
-  import { isDirty, otherSide, statusOf, type Buf, type Entry } from "./lib/workspace";
+  import { isDirty, otherSide, statusOf, type Buf, type Entry, type Op } from "./lib/workspace";
   import {
-    compareTexts, defaultOptions, formatPath, locatePath, planApply, renderNormalized,
+    applyEdits, compareTexts, defaultOptions, formatPath, locatePath, planApply, planRevert, renderNormalized, shortPath,
     type ApplyItem, type Change, type CompareResult, type Direction, type NormalizedView,
-    type ResourceDiff, type SourceRange,
+    type ResourceDiff, type SourceRange, type Touched,
   } from "./lib/semantic";
 
   type Mode = "text" | "semantic";
@@ -32,6 +33,11 @@
   const dirMode = $derived(sources.a?.kind === "dir" || sources.b?.kind === "dir");
   const entry = $derived<Entry | undefined>(entries[current]);
   const anyDirty = () => entries.some((e) => isDirty(e.a) || isDirty(e.b));
+
+  // Applies that can be undone one by one; the side Cmd+Z targets outside an editor.
+  let ops = $state<Op[]>([]);
+  let opSeq = 0;
+  let lastSide: Side | null = null;
 
   let mode = $state<Mode>("semantic");
   let sidebar = $state(true);
@@ -107,6 +113,7 @@
       sources[other] = null;
       entries = [];
     }
+    ops = ops.filter((o) => o.side !== side);
     try {
       if (kind === "file") await loadFile(side, path);
       else await loadDir(side, path);
@@ -154,7 +161,7 @@
   function selectEntry(i: number) {
     current = i;
     const e = entries[i];
-    for (const side of ["a", "b"] as const) raw.setDoc(side, e?.[side]?.text ?? "", e?.[side]?.path ?? e?.rel ?? null);
+    for (const side of ["a", "b"] as const) raw.setDoc(side, e?.[side]?.text ?? "", e?.[side]?.path ?? e?.rel ?? null, true);
     recompute();
   }
 
@@ -170,6 +177,7 @@
     if (!e) return;
     const buf = e[side];
     if (buf) buf.text = text;
+    if (raw.focusedSide() === side) lastSide = side;
     else if (text !== "" && sources[side]?.kind === "dir") {
       // Typing into a file that exists only on the other side creates it here.
       e[side] = { path: joinPath(sources[side]!.path, e.rel), saved: "", text, exists: false };
@@ -202,6 +210,9 @@
     const [s, t]: [Side, Side] = dir === "a-to-b" ? ["a", "b"] : ["b", "a"];
     const src = e[s];
     if (!src) return;
+    const before = e[t]?.text ?? null;
+    if (before === src.text) return;
+    record({ rel: e.rel, side: t, label: `${dir === "a-to-b" ? "→" : "←"} whole file`, before, after: src.text });
     if (e[t]) e[t]!.text = src.text;
     else if (sources[t]?.kind === "dir") e[t] = { path: joinPath(sources[t]!.path, e.rel), saved: "", text: src.text, exists: false };
     else return;
@@ -226,11 +237,76 @@
     }
     if (!items.length) return;
     const target: Side = dir === "a-to-b" ? "b" : "a";
-    const plan = planApply(items, dir, raw.getDoc(target));
+    const before = raw.getDoc(target);
+    const existed = !!entries[current]?.[target];
+    const plan = planApply(items, dir, before);
     raw.applyEdits(target, plan.edits);
+    const after = raw.getDoc(target);
+    if (after !== before) {
+      const touched: Touched[] = items.map(({ resource: r, change: c }) => ({
+        key: (r[target] ?? r[otherSide(target)])!.key,
+        path: c?.path,
+      }));
+      record({ rel: entries[current]?.rel ?? "", side: target, label: describe(items, dir), before: existed ? before : null, after, touched });
+    }
     recompute();
     if (plan.errors.length)
       await message(plan.errors.join("\n"), { title: "Some changes could not be applied", kind: "warning" });
+  }
+
+  function describe(items: ApplyItem[], dir: Direction): string {
+    const arrow = dir === "a-to-b" ? "→" : "←";
+    if (items.length === 1) {
+      const { resource: r, change: c } = items[0];
+      return c ? `${arrow} ${shortPath(c.path)}` : `${arrow} ${r.label}`;
+    }
+    const names = [...new Set(items.map((i) => i.resource.label))];
+    return `${arrow} ${items.length} changes in ${names.join(", ")}`;
+  }
+
+  function record(op: Omit<Op, "id">) {
+    ops.push({ ...op, id: ++opSeq });
+    lastSide = op.side;
+  }
+
+  /** Undo one recorded apply, keeping everything done after it. */
+  async function revertOp(op: Op) {
+    const e = entries.find((x) => x.rel === op.rel);
+    if (!e) return;
+    const isCurrent = e === entries[current];
+    const cur = isCurrent ? raw.getDoc(op.side) : e[op.side]?.text ?? "";
+    let next: string;
+    if (cur === op.after) next = op.before ?? "";
+    else if (op.touched) {
+      const plan = planRevert(op.before ?? "", cur, op.touched, opts);
+      if (plan.errors.length)
+        await message(plan.errors.join("\n"), { title: "Part of the change could not be undone", kind: "warning" });
+      next = applyEdits(cur, plan.edits);
+    } else {
+      await message("This text block was copied before other edits to the same file, so it cannot be undone on its own. Use ⌘Z or edit the text.", { title: "Cannot undo", kind: "info" });
+      return;
+    }
+    ops = ops.filter((o) => o.id !== op.id);
+    if (isCurrent) {
+      raw.applyEdits(op.side, [{ from: 0, to: cur.length, insert: next }]);
+      if (op.before === null && !e[op.side]?.exists && next === "") delete e[op.side];
+      recompute();
+    } else {
+      if (op.before === null && !e[op.side]?.exists) delete e[op.side];
+      else if (e[op.side]) e[op.side]!.text = next;
+      e.status = statusOf(e);
+    }
+    lastSide = op.side;
+  }
+
+  /** Arrow in the text view: copy the block like Meld, recorded for undo. */
+  function onTextArrow(chunk: Chunk, dir: Direction) {
+    const target: Side = dir === "a-to-b" ? "b" : "a";
+    const before = raw.getDoc(target);
+    raw.copyChunk(chunk, dir);
+    const after = raw.getDoc(target);
+    if (after !== before)
+      record({ rel: entries[current]?.rel ?? "", side: target, label: `${dir === "a-to-b" ? "→" : "←"} text block`, before, after });
   }
 
   /** Arrow in the semantic view: apply the changes inside that chunk. */
@@ -312,6 +388,13 @@
       if (e.shiftKey) saveAll();
       else if (side) save(side);
       else { save("a"); save("b"); }
+    } else if (mod && e.key.toLowerCase() === "z" && !(mode === "text" && raw.focusedSide())) {
+      // Outside an editable editor (semantic view, side panel): undo where the last change went.
+      const side = lastSide;
+      if (!side) return;
+      e.preventDefault();
+      if (e.shiftKey) raw.redo(side);
+      else raw.undo(side);
     } else if (mod && e.key.toLowerCase() === "o") {
       e.preventDefault();
       pick(e.shiftKey ? "b" : "a", e.altKey);
@@ -383,6 +466,7 @@
           <FileList {entries} {current} onselect={selectEntry} oncopy={copyFile} />
         {/if}
         <ResourceList {result} {onresource} onchange={onchangeClick} {onedit} onapply={apply} />
+        <HistoryList {ops} showFiles={dirMode} onrevert={revertOp} />
       </aside>
     {/if}
 
@@ -414,7 +498,7 @@
 
       <div class="views">
         <div class="view" class:hidden={mode !== "text"}>
-          <DiffView bind:this={raw} {dark} {collapse} onchange={onRawChange} onchunks={(n) => (chunks = n)} />
+          <DiffView bind:this={raw} {dark} {collapse} onarrow={onTextArrow} onchange={onRawChange} onchunks={(n) => (chunks = n)} />
         </div>
         <div class="view" class:hidden={mode !== "semantic"}>
           <DiffView bind:this={sem} {dark} {collapse} readonly onarrow={onSemanticArrow} onjump={onSemanticJump} />

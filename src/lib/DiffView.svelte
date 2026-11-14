@@ -3,6 +3,7 @@
   import { Compartment } from "@codemirror/state";
   import { EditorView } from "@codemirror/view";
   import { MergeView, goToNextChunk, goToPreviousChunk, type Chunk } from "@codemirror/merge";
+  import { history, undo as cmUndo, redo as cmRedo } from "@codemirror/commands";
   import { baseSetup, languageExt, themeExt } from "./editor";
   import { langFor, type Side } from "./files";
   import type { Direction, Edit } from "./semantic";
@@ -27,8 +28,8 @@
   let host: HTMLDivElement;
   let mv: MergeView | undefined;
   const comp = {
-    a: { language: new Compartment(), theme: new Compartment() },
-    b: { language: new Compartment(), theme: new Compartment() },
+    a: { language: new Compartment(), theme: new Compartment(), history: new Compartment() },
+    b: { language: new Compartment(), theme: new Compartment(), history: new Compartment() },
   };
 
   const collapseConf = (on: boolean) => (on ? { margin: 3, minSize: 6 } : undefined);
@@ -78,7 +79,7 @@
   }
 
   /** Default arrow: copy the chunk's text over the other side (like Meld). */
-  function copyChunk(c: Chunk, dir: Direction) {
+  export function copyChunk(c: Chunk, dir: Direction) {
     if (!mv) return;
     const [src, dst, sf, st, df, dt] = dir === "b-to-a"
       ? [mv.b, mv.a, c.fromB, c.toB, c.fromA, c.toA]
@@ -86,6 +87,7 @@
     let insert = src.state.sliceDoc(sf, Math.max(sf, st - 1));
     if (sf != st && dt <= dst.state.doc.length) insert += src.state.lineBreak;
     dst.dispatch({ changes: { from: df, to: Math.min(dst.state.doc.length, dt), insert }, userEvent: "input.copy" });
+    dst.focus(); // so that Cmd+Z undoes the copy
   }
 
   function onArrowDown(e: MouseEvent) {
@@ -147,12 +149,25 @@
     mv?.reconfigure(conf);
   });
 
-  /** Replace a side's document (e.g. after opening a file). */
-  export function setDoc(side: Side, text: string, path: string | null) {
+  /**
+   * Replace a side's document. `fresh`: a different file is shown now, so the
+   * undo history starts over (otherwise Cmd+Z would bring back the old file).
+   */
+  export function setDoc(side: Side, text: string, path: string | null, fresh = false) {
     const v = view(side);
-    const effects = comp[side].language.reconfigure(languageExt(langFor(path)));
+    const effects = [comp[side].language.reconfigure(languageExt(langFor(path)))];
+    if (fresh) effects.push(comp[side].history.reconfigure([]));
     if (v.state.doc.toString() === text) v.dispatch({ effects });
     else v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: text }, effects });
+    if (fresh) v.dispatch({ effects: comp[side].history.reconfigure(history()) });
+  }
+
+  export function undo(side: Side) {
+    cmUndo(view(side));
+  }
+
+  export function redo(side: Side) {
+    cmRedo(view(side));
   }
 
   export function getDoc(side: Side): string {

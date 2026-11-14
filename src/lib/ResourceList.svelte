@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { formatPath, type ApplyItem, type Change, type CompareResult, type Direction, type ResourceDiff, type ResourceStatus } from "./semantic";
+  import { formatPath, shortPath, type ApplyItem, type Change, type CompareResult, type Direction, type ResourceDiff, type ResourceStatus } from "./semantic";
 
   interface Props {
     result: CompareResult | null;
@@ -25,14 +25,6 @@
   const errors = $derived(
     result ? [...result.errors.a.map((e) => ({ side: "Left", ...e })), ...result.errors.b.map((e) => ({ side: "Right", ...e }))] : [],
   );
-
-  /** Tail of a long path, starting at a field name: `…containers[api].image`. */
-  function shortPath(path: Change["path"]): string {
-    if (path.length <= 4) return formatPath(path);
-    let start = path.length - 4;
-    while (start > 0 && typeof path[start] !== "string") start--;
-    return start === 0 ? formatPath(path) : "…" + formatPath(path.slice(start));
-  }
 
   function short(v: unknown): string {
     const s = typeof v === "string" ? v : JSON.stringify(v);

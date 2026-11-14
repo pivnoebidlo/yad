@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "yad",
+  "productName": "YAD",
   "version": "0.1.0",
-  "identifier": "dev.yad.app",
+  "identifier": "dev.yad.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "yad \u2014 Yet Another Diff",
+        "title": "YAD — YAML Ain't Different",
         "width": 1400,
         "height": 900,
         "minWidth": 800,
@@ -39,6 +39,6 @@
       "signingIdentity": "-",
       "minimumSystemVersion": "11.0"
     },
-    "shortDescription": "Semantic YAML/JSON diff for Kubernetes manifests"
+    "shortDescription": "YAML Ain't Different: semantic YAML/JSON diff for Kubernetes manifests"
   }
 }

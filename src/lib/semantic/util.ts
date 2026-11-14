@@ -147,3 +147,11 @@ export function locatePath(root: Node, path: PathSeg[], ctx: SourceCtx): SourceR
   }
   return range;
 }
+
+/** Tail of a long path, starting at a field name: `…containers[api].image`. */
+export function shortPath(path: PathSeg[]): string {
+  if (path.length <= 4) return formatPath(path);
+  let start = path.length - 4;
+  while (start > 0 && typeof path[start] !== "string") start--;
+  return start === 0 ? formatPath(path) : "…" + formatPath(path.slice(start));
+}

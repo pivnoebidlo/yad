@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { applyEdits, compareTexts, formatPath, planApply, type Direction } from "./index";
+import { applyEdits, compareTexts, formatPath, planApply, planRevert, type Direction } from "./index";
 
 const fixture = (name: string) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8");
 
@@ -139,5 +139,51 @@ env:
     const out = apply(onlyService, b, "a-to-b");
     expect(statuses(onlyService, out).every((s) => s.endsWith("equal"))).toBe(true);
     expect(out).toContain("kind: List");
+  });
+});
+
+describe("planRevert", () => {
+  const a = fixture("manifest.yaml");
+  const b = fixture("live.yaml");
+
+  /** Apply one change a→b; return the target before/after and what was touched. */
+  function applyOne(path: string) {
+    const res = compareTexts(a, b);
+    const r = res.resources.find((x) => x.changes.some((c) => formatPath(c.path) === path))!;
+    const c = r.changes.find((x) => formatPath(x.path) === path)!;
+    const plan = planApply([{ resource: r, change: c }], "a-to-b", b);
+    return { after: applyEdits(b, plan.edits), touched: [{ key: r.b!.key, path: c.path }] };
+  }
+
+  it("reverts an early apply after later unrelated edits", () => {
+    const { after, touched } = applyOne("spec.template.spec.containers[web].image");
+    expect(after).toContain("registry.local/web:1.4.0");
+    // Later, unrelated edits in the same file.
+    const later = after.replace("replicas: 3", "replicas: 7").replace("value: debug", "value: warn");
+    const plan = planRevert(b, later, touched);
+    expect(plan.errors).toEqual([]);
+    const out = applyEdits(later, plan.edits);
+    expect(out).toContain("registry.local/web:1.5.0");
+    expect(out).toContain("replicas: 7");
+    expect(out).toContain("value: warn");
+  });
+
+  it("reverts inserted and removed resources", () => {
+    const cm = (n: string) => `apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: ${n}\n`;
+    const src = [cm("one"), cm("two")].join("---\n");
+    const dst = [cm("one"), cm("old")].join("---\n");
+    const res = compareTexts(src, dst);
+    const two = res.resources.find((r) => r.label.endsWith("two"))!;
+    const old = res.resources.find((r) => r.label.endsWith("old"))!;
+    const plan = planApply([{ resource: two }, { resource: old }], "a-to-b", dst);
+    const after = applyEdits(dst, plan.edits);
+    expect(compareTexts(src, after).resources.every((r) => r.status === "equal")).toBe(true);
+    const later = after.replace("name: one", "name: one\n  labels: {x: y}");
+    const rev = planRevert(dst, later, [{ key: two.a!.key }, { key: old.b!.key }]);
+    expect(rev.errors).toEqual([]);
+    const out = applyEdits(later, rev.edits);
+    expect(out).toContain("name: old");
+    expect(out).not.toContain("name: two");
+    expect(out).toContain("labels: {x: y}");
   });
 });

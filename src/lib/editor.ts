@@ -23,6 +23,7 @@ export const themeExt = (dark: boolean): Extension => (dark ? oneDark : []);
 export function baseSetup(opts: {
   language: Compartment;
   theme: Compartment;
+  history: Compartment;
   lang: Lang;
   dark: boolean;
   readonly?: boolean;
@@ -33,7 +34,7 @@ export function baseSetup(opts: {
     lineNumbers(),
     highlightActiveLineGutter(),
     highlightSpecialChars(),
-    history(),
+    opts.history.of(history()),
     foldGutter(),
     drawSelection(),
     EditorState.allowMultipleSelections.of(true),
