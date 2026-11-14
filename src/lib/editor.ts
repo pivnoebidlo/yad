@@ -1,7 +1,7 @@
 // Minimal CodeMirror setup: only what a diff editor needs, to keep the bundle small.
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import {
-  EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter,
+  EditorView, type ViewUpdate, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter,
   drawSelection, highlightSpecialChars, rectangularSelection, crosshairCursor,
 } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
@@ -28,6 +28,7 @@ export function baseSetup(opts: {
   dark: boolean;
   readonly?: boolean;
   onChange?: () => void;
+  onUpdate?: (u: ViewUpdate) => void;
 }): Extension {
   return [
     opts.readonly ? EditorState.readOnly.of(true) : [],
@@ -52,6 +53,7 @@ export function baseSetup(opts: {
     opts.language.of(languageExt(opts.lang)),
     opts.theme.of(themeExt(opts.dark)),
     EditorView.updateListener.of((u) => {
+      opts.onUpdate?.(u);
       if (u.docChanged) opts.onChange?.();
     }),
   ];

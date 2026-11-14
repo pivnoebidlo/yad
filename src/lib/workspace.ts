@@ -52,4 +52,24 @@ export interface Op {
   after: string;
   /** Semantic paths touched; absent for plain text block copies. */
   touched?: Touched[];
+  /** Text copies: where the copied block starts in the target, kept up to date. */
+  anchor?: number;
+}
+
+/** An "undo" button shown in the arrow column at the line of `pos` on `side`. */
+export interface Marker {
+  id: number;
+  side: Side;
+  pos: number;
+  title: string;
+}
+
+/** Smallest single edit turning `from` into `to` (common prefix/suffix kept). */
+export function minimalEdit(from: string, to: string) {
+  let p = 0;
+  const max = Math.min(from.length, to.length);
+  while (p < max && from[p] === to[p]) p++;
+  let s = 0;
+  while (s < max - p && from[from.length - 1 - s] === to[to.length - 1 - s]) s++;
+  return { from: p, to: from.length - s, insert: to.slice(p, to.length - s) };
 }

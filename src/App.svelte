@@ -4,6 +4,7 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { open, ask, message } from "@tauri-apps/plugin-dialog";
   import type { Chunk } from "@codemirror/merge";
+  import type { ChangeDesc } from "@codemirror/state";
   import DiffView from "./lib/DiffView.svelte";
   import ResourceList from "./lib/ResourceList.svelte";
   import FileList from "./lib/FileList.svelte";
@@ -11,7 +12,7 @@
   import {
     readText, writeText, initialPaths, baseName, pathKind, listFiles, joinPath, type Side,
   } from "./lib/files";
-  import { isDirty, otherSide, statusOf, type Buf, type Entry, type Op } from "./lib/workspace";
+  import { isDirty, minimalEdit, otherSide, statusOf, type Buf, type Entry, type Marker, type Op } from "./lib/workspace";
   import {
     applyEdits, compareTexts, defaultOptions, formatPath, locatePath, planApply, planRevert, renderNormalized, shortPath,
     type ApplyItem, type Change, type CompareResult, type Direction, type NormalizedView,
@@ -48,7 +49,9 @@
   // Semantic state. `$state.raw`: results hold yaml nodes, which must not be proxied.
   const opts = defaultOptions();
   let result = $state.raw<CompareResult | null>(null);
-  let normalized: NormalizedView | null = null;
+  let normalized = $state.raw<NormalizedView | null>(null);
+  /** True while a whole document is being replaced (file switch): positions are not mapped. */
+  let loading = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
@@ -161,7 +164,9 @@
   function selectEntry(i: number) {
     current = i;
     const e = entries[i];
+    loading = true;
     for (const side of ["a", "b"] as const) raw.setDoc(side, e?.[side]?.text ?? "", e?.[side]?.path ?? e?.rel ?? null, true);
+    loading = false;
     recompute();
   }
 
@@ -212,7 +217,7 @@
     if (!src) return;
     const before = e[t]?.text ?? null;
     if (before === src.text) return;
-    record({ rel: e.rel, side: t, label: `${dir === "a-to-b" ? "→" : "←"} whole file`, before, after: src.text });
+    record({ rel: e.rel, side: t, label: `${dir === "a-to-b" ? "→" : "←"} whole file`, before, after: src.text, anchor: 0 });
     if (e[t]) e[t]!.text = src.text;
     else if (sources[t]?.kind === "dir") e[t] = { path: joinPath(sources[t]!.path, e.rel), saved: "", text: src.text, exists: false };
     else return;
@@ -288,7 +293,7 @@
     }
     ops = ops.filter((o) => o.id !== op.id);
     if (isCurrent) {
-      raw.applyEdits(op.side, [{ from: 0, to: cur.length, insert: next }]);
+      raw.applyEdits(op.side, [minimalEdit(cur, next)]);
       if (op.before === null && !e[op.side]?.exists && next === "") delete e[op.side];
       recompute();
     } else {
@@ -305,8 +310,47 @@
     const before = raw.getDoc(target);
     raw.copyChunk(chunk, dir);
     const after = raw.getDoc(target);
-    if (after !== before)
-      record({ rel: entries[current]?.rel ?? "", side: target, label: `${dir === "a-to-b" ? "→" : "←"} text block`, before, after });
+    if (after !== before) {
+      const anchor = target === "b" ? chunk.fromB : chunk.fromA;
+      record({ rel: entries[current]?.rel ?? "", side: target, label: `${dir === "a-to-b" ? "→" : "←"} text block`, before, after, anchor });
+    }
+  }
+
+  /** Keep text-copy anchors in place while the document is edited. */
+  function onRawTx(side: Side, changes: ChangeDesc) {
+    if (loading) return;
+    const rel = entries[current]?.rel;
+    for (const op of ops) if (op.rel === rel && op.side === side && op.anchor !== undefined) op.anchor = changes.mapPos(op.anchor);
+  }
+
+  /** Where to draw each undoable apply's ✕ in the text or semantic view. */
+  function markersFor(view: Mode): Marker[] {
+    const e = entries[current];
+    if (!e) return [];
+    const out: Marker[] = [];
+    for (const op of ops) {
+      if (op.rel !== e.rel) continue;
+      let pos: number | undefined;
+      const t = op.touched?.[0];
+      if (t) {
+        const r = result?.resources.find((x) => x.key === t.key || x.a?.key === t.key || x.b?.key === t.key);
+        if (!r) continue;
+        if (view === "semantic") pos = normalized?.locate(op.side, r.key, t.path)?.from;
+        else {
+          const tr = r[op.side];
+          pos = tr ? locatePath(tr.node, t.path ?? [], tr.ctx)?.from : undefined;
+        }
+      } else if (view === "text") pos = op.anchor;
+      if (pos !== undefined) out.push({ id: op.id, side: op.side, pos, title: op.label });
+    }
+    return out;
+  }
+  const rawMarkers = $derived(markersFor("text"));
+  const semMarkers = $derived(markersFor("semantic"));
+
+  function onmarker(id: number) {
+    const op = ops.find((o) => o.id === id);
+    if (op) revertOp(op);
   }
 
   /** Arrow in the semantic view: apply the changes inside that chunk. */
@@ -498,10 +542,12 @@
 
       <div class="views">
         <div class="view" class:hidden={mode !== "text"}>
-          <DiffView bind:this={raw} {dark} {collapse} onarrow={onTextArrow} onchange={onRawChange} onchunks={(n) => (chunks = n)} />
+          <DiffView bind:this={raw} {dark} {collapse} onarrow={onTextArrow} onchange={onRawChange} ontx={onRawTx}
+            onchunks={(n) => (chunks = n)} markers={rawMarkers} {onmarker} />
         </div>
         <div class="view" class:hidden={mode !== "semantic"}>
-          <DiffView bind:this={sem} {dark} {collapse} readonly onarrow={onSemanticArrow} onjump={onSemanticJump} />
+          <DiffView bind:this={sem} {dark} {collapse} readonly onarrow={onSemanticArrow} onjump={onSemanticJump}
+            markers={semMarkers} {onmarker} />
         </div>
       </div>
     </section>

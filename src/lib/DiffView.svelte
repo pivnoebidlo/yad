@@ -1,12 +1,13 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Compartment } from "@codemirror/state";
+  import { Compartment, type ChangeDesc } from "@codemirror/state";
   import { EditorView } from "@codemirror/view";
   import { MergeView, goToNextChunk, goToPreviousChunk, type Chunk } from "@codemirror/merge";
   import { history, undo as cmUndo, redo as cmRedo } from "@codemirror/commands";
   import { baseSetup, languageExt, themeExt } from "./editor";
   import { langFor, type Side } from "./files";
   import type { Direction, Edit } from "./semantic";
+  import type { Marker } from "./workspace";
 
   type Span = { from: number; to: number };
 
@@ -21,9 +22,16 @@
     /** Read-only views: the user double-clicked or started typing at `pos`. */
     onjump?: (side: Side, pos: number) => void;
     onchange?: (side: Side, text: string) => void;
+    /** Every document change, for mapping stored positions. */
+    ontx?: (side: Side, changes: ChangeDesc) => void;
     onchunks?: (count: number) => void;
+    markers?: Marker[];
+    onmarker?: (id: number) => void;
   }
-  let { dark, collapse, readonly = false, arrows = true, onarrow, onjump, onchange, onchunks }: Props = $props();
+  let {
+    dark, collapse, readonly = false, arrows = true, onarrow, onjump, onchange, ontx, onchunks,
+    markers = [], onmarker,
+  }: Props = $props();
 
   let host: HTMLDivElement;
   let mv: MergeView | undefined;
@@ -118,9 +126,69 @@
       },
     });
 
+  // ---- undo markers (✕) in the arrow column ---------------------------------
+  // The column itself is rebuilt by MergeView, so markers live in an overlay
+  // on top of it, positioned with the same line coordinates.
+  let overlay: HTMLDivElement | undefined;
+  let renderQueued = false;
+
+  function queueRender() {
+    if (renderQueued) return;
+    renderQueued = true;
+    requestAnimationFrame(() => {
+      renderQueued = false;
+      renderMarkers();
+    });
+  }
+
+  function renderMarkers() {
+    const col = mv?.dom.querySelector<HTMLElement>(".cm-merge-revert");
+    if (!mv || !overlay || !col) return;
+    overlay.style.left = col.offsetLeft + "px";
+    overlay.style.width = col.offsetWidth + "px";
+    const used = new Set<number>();
+    const nodes: HTMLElement[] = [];
+    // Newest first, one marker per line.
+    for (const m of [...markers].reverse()) {
+      const v = view(m.side);
+      const top = Math.round(v.lineBlockAt(Math.min(m.pos, v.state.doc.length)).top);
+      if (used.has(top)) continue;
+      used.add(top);
+      const b = document.createElement("button");
+      b.className = "yad-undo";
+      b.textContent = "✕";
+      b.title = `Undo: ${m.title}`;
+      b.style.top = top + "px";
+      // Keep editor focus on press; act only on a full click on the button,
+      // so a press that started elsewhere can never undo anything.
+      b.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      });
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        onmarker?.(m.id);
+      });
+      nodes.push(b);
+    }
+    overlay.replaceChildren(...nodes);
+  }
+
+  $effect(() => {
+    markers; // re-render when the list changes
+    queueRender();
+  });
+
   onMount(() => {
     const ext = (side: Side) => [
-      baseSetup({ ...comp[side], lang: "plain", dark, readonly, onChange: () => changed(side) }),
+      baseSetup({
+        ...comp[side], lang: "plain", dark, readonly,
+        onChange: () => changed(side),
+        onUpdate: (u) => {
+          if (u.docChanged) ontx?.(side, u.changes);
+          if (u.docChanged || u.geometryChanged || u.viewportChanged) queueRender();
+        },
+      }),
       readonly ? jumpHandlers(side) : [],
     ];
     mv = new MergeView({
@@ -134,6 +202,9 @@
       collapseUnchanged: collapseConf(collapse),
     });
     mv.dom.addEventListener("mousedown", onArrowDown, true);
+    overlay = document.createElement("div");
+    overlay.className = "yad-markers";
+    mv.dom.querySelector(".cm-mergeViewEditors")?.appendChild(overlay);
     return () => mv?.destroy();
   });
 
@@ -229,18 +300,43 @@
   .diff :global(.cm-scroller) {
     font-family: ui-monospace, "SF Mono", Menlo, monospace;
   }
+  .diff :global(.cm-mergeViewEditors) {
+    position: relative;
+  }
+  .diff :global(.yad-markers) {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    pointer-events: none;
+  }
+  .diff :global(.yad-undo) {
+    position: absolute;
+    right: 3px;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: none;
+    border-radius: 4px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font: 11px/18px -apple-system, system-ui, sans-serif;
+    cursor: pointer;
+    pointer-events: auto;
+  }
+  .diff :global(.yad-undo:hover) {
+    background: var(--removed);
+    color: white;
+  }
   .diff :global(.cm-merge-revert) {
-    width: 46px;
+    width: 66px;
     background: var(--panel);
     border-left: 1px solid var(--border);
     border-right: 1px solid var(--border);
   }
   .diff :global(.yad-arrows) {
     position: absolute;
-    left: 0;
-    right: 0;
+    left: 3px;
     display: flex;
-    justify-content: center;
     gap: 2px;
   }
   .diff :global(.cm-merge-revert .yad-arrows button) {
