@@ -15,50 +15,57 @@ export function diffNodes(
   const skipOneSided = (value: unknown, ctx: SourceCtx, p: PathSeg[]) =>
     isIgnored(p, ignore) || (opts.emptyEqualsMissing && isEmptyAfterIgnore(value, ctx, p, ignore));
 
-  function compare(an0: unknown, bn0: unknown, path: PathSeg[]) {
-    if (isIgnored(path, ignore)) return;
+  // Paths are tracked for both sides: inside unkeyed lists the same item can
+  // sit at different indexes on the left and on the right.
+  const same = (x: PathSeg[], y: PathSeg[]) => x.length === y.length && x.every((s, i) => s === y[i]);
+  function push(c: Change, ap: PathSeg[], bp: PathSeg[]) {
+    if (!same(ap, c.path)) c.aPath = ap;
+    if (!same(bp, c.path)) c.bPath = bp;
+    changes.push(c);
+  }
+
+  function compare(an0: unknown, bn0: unknown, ap: PathSeg[], bp: PathSeg[]) {
+    if (isIgnored(bp, ignore)) return;
     const an = deref(an0, sa);
     const bn = deref(bn0, sb);
-    if (isMap(an) && isMap(bn)) return maps(an, bn, path);
-    if (isSeq(an) && isSeq(bn)) return seqs(an, bn, path);
+    if (isMap(an) && isMap(bn)) return maps(an, bn, ap, bp);
+    if (isSeq(an) && isSeq(bn)) return seqs(an, bn, ap, bp);
     const av = js(an, sa);
     const bv = js(bn, sb);
     if (canonicalString(av) !== canonicalString(bv))
-      changes.push({ path, kind: "changed", a: av, b: bv, aRange: nodeRange(an, sa), bRange: nodeRange(bn, sb) });
+      push({ path: bp, kind: "changed", a: av, b: bv, aRange: nodeRange(an, sa), bRange: nodeRange(bn, sb) }, ap, bp);
   }
 
-  function maps(am: YAMLMap, bm: YAMLMap, path: PathSeg[]) {
+  function maps(am: YAMLMap, bm: YAMLMap, ap: PathSeg[], bp: PathSeg[]) {
     const bPairs = new Map((bm.items as Pair[]).map((p) => [keyString(p), p]));
-    for (const ap of am.items as Pair[]) {
-      const k = keyString(ap);
-      const bp = bPairs.get(k);
-      const p = [...path, k];
-      if (bp) {
+    for (const apair of am.items as Pair[]) {
+      const k = keyString(apair);
+      const bpair = bPairs.get(k);
+      if (bpair) {
         bPairs.delete(k);
-        compare(ap.value, bp.value, p);
-      } else if (!skipOneSided(ap.value, sa, p)) {
-        changes.push({ path: p, kind: "removed", a: js(deref(ap.value, sa), sa), aRange: pairRange(ap, sa) });
+        compare(apair.value, bpair.value, [...ap, k], [...bp, k]);
+      } else if (!skipOneSided(apair.value, sa, [...ap, k])) {
+        push({ path: [...ap, k], kind: "removed", a: js(deref(apair.value, sa), sa), aRange: pairRange(apair, sa) }, [...ap, k], [...bp, k]);
       }
     }
-    for (const [k, bp] of bPairs) {
-      const p = [...path, k];
-      if (!skipOneSided(bp.value, sb, p))
-        changes.push({ path: p, kind: "added", b: js(deref(bp.value, sb), sb), bRange: pairRange(bp, sb) });
+    for (const [k, bpair] of bPairs) {
+      if (!skipOneSided(bpair.value, sb, [...bp, k]))
+        push({ path: [...bp, k], kind: "added", b: js(deref(bpair.value, sb), sb), bRange: pairRange(bpair, sb) }, [...ap, k], [...bp, k]);
     }
   }
 
-  const removed = (n: unknown, path: PathSeg[]) => {
+  const removed = (n: unknown, ap: PathSeg[], bp: PathSeg[]) => {
     const node = deref(n, sa);
-    changes.push({ path, kind: "removed", a: js(node, sa), aRange: nodeRange(node, sa) });
+    push({ path: ap, kind: "removed", a: js(node, sa), aRange: nodeRange(node, sa) }, ap, bp);
   };
-  const added = (n: unknown, path: PathSeg[]) => {
+  const added = (n: unknown, ap: PathSeg[], bp: PathSeg[]) => {
     const node = deref(n, sb);
-    changes.push({ path, kind: "added", b: js(node, sb), bRange: nodeRange(node, sb) });
+    push({ path: bp, kind: "added", b: js(node, sb), bRange: nodeRange(node, sb) }, ap, bp);
   };
 
-  function seqs(as: YAMLSeq, bs: YAMLSeq, path: PathSeg[]) {
-    const mk = pickMergeKey(fieldName(path), [{ items: as.items, ctx: sa }, { items: bs.items, ctx: sb }], opts);
-    if (mk) return keyedSeqs(as, bs, mk, path);
+  function seqs(as: YAMLSeq, bs: YAMLSeq, ap: PathSeg[], bp: PathSeg[]) {
+    const mk = pickMergeKey(fieldName(bp), [{ items: as.items, ctx: sa }, { items: bs.items, ctx: sb }], opts);
+    if (mk) return keyedSeqs(as, bs, mk, ap, bp);
 
     // Unkeyed list: order matters. Align equal items with LCS, then compare
     // the gaps between them position by position.
@@ -70,24 +77,48 @@ export function diffNodes(
       for (let j = n - 1; j >= 0; j--)
         dp[i][j] = ak[i] === bk[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
 
+    // Items outside the LCS that are identical on both sides are moves, not
+    // a removal plus an addition.
+    const inLcs = { a: new Set<number>(), b: new Set<number>() };
+    for (let x = 0, y = 0; x < m && y < n; ) {
+      if (ak[x] === bk[y]) { inLcs.a.add(x++); inLcs.b.add(y++); }
+      else if (dp[x + 1][y] >= dp[x][y + 1]) x++;
+      else y++;
+    }
+    const freeA = new Map<string, number[]>();
+    for (let x = 0; x < m; x++) if (!inLcs.a.has(x)) (freeA.get(ak[x]) ?? freeA.set(ak[x], []).get(ak[x])!).push(x);
+    const movedA = new Set<number>(), movedB = new Set<number>();
+    for (let y = 0; y < n; y++) {
+      if (inLcs.b.has(y)) continue;
+      const x = freeA.get(bk[y])?.shift();
+      if (x === undefined) continue;
+      movedA.add(x);
+      movedB.add(y);
+      const an = deref(as.items[x], sa), bn = deref(bs.items[y], sb);
+      push(
+        { path: [...bp, y], kind: "moved", a: js(an, sa), b: js(bn, sb), aRange: nodeRange(an, sa), bRange: nodeRange(bn, sb), fromIndex: x },
+        [...ap, x], [...bp, y],
+      );
+    }
+
     let i = 0, j = 0;
     const gapA: number[] = [], gapB: number[] = [];
     const flush = () => {
       const common = Math.min(gapA.length, gapB.length);
-      for (let k = 0; k < common; k++) compare(as.items[gapA[k]], bs.items[gapB[k]], [...path, gapB[k]]);
-      for (let k = common; k < gapA.length; k++) removed(as.items[gapA[k]], [...path, gapA[k]]);
-      for (let k = common; k < gapB.length; k++) added(bs.items[gapB[k]], [...path, gapB[k]]);
+      for (let k = 0; k < common; k++) compare(as.items[gapA[k]], bs.items[gapB[k]], [...ap, gapA[k]], [...bp, gapB[k]]);
+      for (let k = common; k < gapA.length; k++) removed(as.items[gapA[k]], [...ap, gapA[k]], [...bp, gapA[k]]);
+      for (let k = common; k < gapB.length; k++) added(bs.items[gapB[k]], [...ap, gapB[k]], [...bp, gapB[k]]);
       gapA.length = gapB.length = 0;
     };
     while (i < m || j < n) {
       if (i < m && j < n && ak[i] === bk[j]) { flush(); i++; j++; }
-      else if (j >= n || (i < m && dp[i + 1][j] >= dp[i][j + 1])) gapA.push(i++);
-      else gapB.push(j++);
+      else if (j >= n || (i < m && dp[i + 1][j] >= dp[i][j + 1])) { if (!movedA.has(i)) gapA.push(i); i++; }
+      else { if (!movedB.has(j)) gapB.push(j); j++; }
     }
     flush();
   }
 
-  function keyedSeqs(as: YAMLSeq, bs: YAMLSeq, mk: string, path: PathSeg[]) {
+  function keyedSeqs(as: YAMLSeq, bs: YAMLSeq, mk: string, ap: PathSeg[], bp: PathSeg[]) {
     const keyOf = (n: unknown, ctx: SourceCtx) => getScalar(deref(n, ctx) as YAMLMap, mk, ctx)!;
     const bItems = new Map(bs.items.map((n) => [keyOf(n, sb), n]));
     for (const an of as.items) {
@@ -96,12 +127,12 @@ export function diffNodes(
       const bn = bItems.get(k);
       if (bn !== undefined) {
         bItems.delete(k);
-        compare(an, bn, [...path, seg]);
-      } else removed(an, [...path, seg]);
+        compare(an, bn, [...ap, seg], [...bp, seg]);
+      } else removed(an, [...ap, seg], [...bp, seg]);
     }
-    for (const [k, bn] of bItems) added(bn, [...path, { key: mk, value: k }]);
+    for (const [k, bn] of bItems) added(bn, [...ap, { key: mk, value: k }], [...bp, { key: mk, value: k }]);
   }
 
-  compare(a, b, []);
+  compare(a, b, [], []);
   return changes;
 }

@@ -1,6 +1,7 @@
 import { LineCounter, isMap, isScalar, isSeq, parseAllDocuments, type Node, type YAMLMap } from "yaml";
 import type { ParseError, Resource, ResourceId, SourceCtx } from "./types";
-import { deref, getMap, getScalar, getPair, nodeRange } from "./util";
+import { deref, getMap, getScalar, getPair, nodeRange, toJS } from "./util";
+import { detectKind } from "./kinds";
 
 function resourceId(map: YAMLMap, ctx: SourceCtx): ResourceId | null {
   const apiVersion = getScalar(map, "apiVersion", ctx) ?? "";
@@ -45,6 +46,7 @@ export function parseResources(text: string): { resources: Resource[]; errors: P
     resources.push({
       key,
       id,
+      docKind: id ? "kubernetes" : detectKind(toJS(node, ctx)),
       label: id ? idLabel(id) : `Document ${fallbackKey.slice(1)}`,
       node,
       range: nodeRange(node, ctx) ?? { from: 0, to: 0, line: 1 },

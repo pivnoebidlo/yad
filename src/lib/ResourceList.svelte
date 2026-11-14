@@ -33,6 +33,10 @@
   }
 
   function changeText(c: Change): string {
+    if (c.kind === "moved") {
+      const to = c.path[c.path.length - 1] as number;
+      return `${t("movedText", { from: (c.fromIndex ?? 0) + 1, to: to + 1 })} · ${short(c.b)}`;
+    }
     if (c.kind === "changed") return `${short(c.a)} → ${short(c.b)}`;
     return short(c.kind === "added" ? c.b : c.a);
   }
@@ -127,5 +131,6 @@
   .s-changed .icon, .s-changed.change .path, .summary .s-changed { color: var(--changed); }
   .s-added .icon, .s-added.change .path, .summary .s-added { color: var(--added); }
   .s-removed .icon, .s-removed.change .path, .summary .s-removed { color: var(--removed); }
+  .s-moved.change .path { color: var(--accent); }
   .s-equal .icon, .summary .s-equal, .res.s-equal { color: var(--muted); }
 </style>

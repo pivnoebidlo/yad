@@ -81,15 +81,8 @@ export interface Marker {
   title: string;
 }
 
-/** Smallest single edit turning `from` into `to` (common prefix/suffix kept). */
-export function minimalEdit(from: string, to: string) {
-  let p = 0;
-  const max = Math.min(from.length, to.length);
-  while (p < max && from[p] === to[p]) p++;
-  let s = 0;
-  while (s < max - p && from[from.length - 1 - s] === to[to.length - 1 - s]) s++;
-  return { from: p, to: from.length - s, insert: to.slice(p, to.length - s) };
-}
+/** Smallest single edit turning one text into another (lives in the engine). */
+export { minimalEdit } from "./semantic";
 
 /**
  * Store an editor's text in the entry's buffer for `side`. A side without a

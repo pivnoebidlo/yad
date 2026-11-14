@@ -6,8 +6,10 @@
     entries: Entry[];
     current: number;
     onselect: (i: number) => void;
+    /** Format or align every file on one side. */
+    onbulk?: (kind: "format" | "align", side: "a" | "b") => void;
   }
-  let { entries, current, onselect }: Props = $props();
+  let { entries, current, onselect, onbulk }: Props = $props();
 
   let hideEqual = $state(true);
   let list: HTMLDivElement;
@@ -52,6 +54,16 @@
     {#if counts.error}<span title={t("noParse")}><i class="dot s-error"></i>{counts.error}</span>{/if}
     <label title={t("hideEqualFilesTitle")}><input type="checkbox" bind:checked={hideEqual} /> {t("hideEqual")}</label>
   </div>
+  {#if onbulk}
+    <div class="bulk">
+      <span>{t("bulkFormat")}</span>
+      <button onclick={() => onbulk("format", "a")} title={t("bulkFormatTitle", { side: t("sideLeftName") })}>{t("bulkLeft")}</button>
+      <button onclick={() => onbulk("format", "b")} title={t("bulkFormatTitle", { side: t("sideRightName") })}>{t("bulkRight")}</button>
+      <span class="sep">{t("bulkAlign")}</span>
+      <button onclick={() => onbulk("align", "a")} title={t("bulkAlignTitleLeft")}>{t("bulkLeft")}</button>
+      <button onclick={() => onbulk("align", "b")} title={t("bulkAlignTitleRight")}>{t("bulkRight")}</button>
+    </div>
+  {/if}
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
   <div class="items" bind:this={list} tabindex="0" role="listbox" aria-label={t("files")} onkeydown={onkey}>
     {#each visible as { e, i } (e.rel)}
@@ -72,6 +84,9 @@
   .summary { display: flex; gap: 10px; align-items: center; padding: 4px 10px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
   .summary span { display: flex; align-items: center; gap: 4px; }
   .summary label { margin-left: auto; display: flex; gap: 4px; align-items: center; color: var(--muted); }
+  .bulk { display: flex; gap: 4px; align-items: center; padding: 3px 10px; border-bottom: 1px solid var(--border); color: var(--muted); white-space: nowrap; overflow: hidden; }
+  .bulk .sep { margin-left: 8px; }
+  .bulk button { padding: 0 6px; font-size: 11px; }
   .items { overflow-y: auto; min-height: 0; flex: 1; outline: none; }
   .items:focus-visible .row.active, .items:focus-within .row.active { box-shadow: inset 2px 0 0 var(--accent); }
   .empty { padding: 10px; color: var(--muted); text-align: center; }

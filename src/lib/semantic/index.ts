@@ -1,14 +1,20 @@
 import { defaultOptions } from "./config";
 import { diffNodes } from "./diff";
 import { matchResources, parseResources } from "./resources";
+import { optionsForKind } from "./kinds";
 import { planApply, type ApplyItem, type ApplyResult } from "./patch";
 import type { CompareOptions, CompareResult, PathSeg, ResourceDiff } from "./types";
+import { pathOn } from "./util";
 
 export * from "./types";
 export { defaultOptions, DEFAULT_IGNORE, DEFAULT_MERGE_KEYS } from "./config";
-export { formatPath, locatePath, parsePath, shortPath } from "./util";
+export { formatPath, locatePath, minimalEdit, parsePath, pathOn, shortPath } from "./util";
+export { isJsonText } from "./json";
+export { formatText, defaultFormatOptions, type FormatOptions, type FormatResult } from "./format";
+export { alignOrder, type AlignResult } from "./align";
 export { renderNormalized, normalizeResource, type NormalizedView } from "./normalize";
 export { planApply, applyEdits, type ApplyItem, type ApplyResult, type Direction, type Edit } from "./patch";
+export { detectKind, optionsForKind, KIND_LABELS, PIPELINE_KINDS, type DocKind } from "./kinds";
 
 const sortKey = (r: ResourceDiff) => {
   const id = (r.a ?? r.b)!.id;
@@ -25,8 +31,8 @@ export function compareTexts(a: string, b: string, options: Partial<CompareOptio
     const r = (ra ?? rb)!;
     if (!ra) return { key: r.key, label: r.label, status: "added", b: rb, changes: [] };
     if (!rb) return { key: r.key, label: r.label, status: "removed", a: ra, changes: [] };
-    const ignore = ra.id || rb.id ? opts.ignore : [];
-    const changes = diffNodes(ra.node, rb.node, ra.ctx, rb.ctx, opts, ignore);
+    const kopts = optionsForKind(ra.docKind === rb.docKind ? ra.docKind : "yaml", opts);
+    const changes = diffNodes(ra.node, rb.node, ra.ctx, rb.ctx, kopts, kopts.ignore);
     return { key: r.key, label: r.label, status: changes.length ? "changed" : "equal", a: ra, b: rb, changes };
   });
 
@@ -61,7 +67,8 @@ export function planRevert(before: string, current: string, touched: Touched[], 
       continue;
     }
     for (const c of r.changes)
-      if (ts.some((t) => isPrefix(t.path!, c.path) || isPrefix(c.path, t.path!))) items.push({ resource: r, change: c });
+      if (ts.some((t) => (["a", "b"] as const).some((s) => isPrefix(t.path!, pathOn(c, s)) || isPrefix(pathOn(c, s), t.path!))))
+        items.push({ resource: r, change: c });
   }
   return planApply(items, "a-to-b", current);
 }
@@ -81,7 +88,7 @@ export function planSemanticEdit(
   for (const r of diff.resources) {
     if (r.status === "equal") continue;
     if (!r.a || !r.b) touched.push({ key: (r.a ?? r.b)!.key });
-    else for (const c of r.changes) touched.push({ key: r.b.key, path: c.path });
+    else for (const c of r.changes) touched.push({ key: r.b.key, path: pathOn(c, "b") });
   }
   if (!touched.length) return { side: "b", edits: [], errors: [] };
   return planRevert(newNorm, source, touched, options);
