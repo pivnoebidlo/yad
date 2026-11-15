@@ -21,6 +21,11 @@ export const baseName = (path: string) => path.split(/[\\/]/).pop() ?? path;
 export const pathKind = (path: string) => invoke<"file" | "dir" | "missing">("path_kind", { path });
 /** Modification fingerprint per path; null when the file is gone. */
 export const fileStamps = (paths: string[]) => invoke<Array<string | null>>("file_stamps", { paths });
+export type RenderTool = "kustomize" | "helm";
+/** "kustomize"/"helm" when the folder is such a project. */
+export const projectKind = (dir: string) => invoke<RenderTool | null>("project_kind", { dir });
+/** `kustomize build` / `helm template` output for a folder. */
+export const render = (tool: RenderTool, dir: string, values: string[] = []) => invoke<string>("render", { tool, dir, values });
 export const listFiles = (root: string) => invoke<string[]>("list_files", { root });
 
 /** Join a root directory and a `/`-separated relative path. */

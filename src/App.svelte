@@ -16,7 +16,7 @@
   import { t, tn } from "./lib/i18n.svelte";
   import { actionFor, comboOf, formatCombo, type ActionId } from "./lib/hotkeys";
   import {
-    readText, writeText, initialPaths, baseName, pathKind, listFiles, fileStamps, joinPath, type Side,
+    readText, writeText, initialPaths, baseName, pathKind, listFiles, fileStamps, joinPath, projectKind, render, type RenderTool, type Side,
   } from "./lib/files";
   import {
     decodeText, diskChange, encodeText, isDirty, minimalEdit, otherSide, statusOf, storeEditorText, type Buf, type Entry, type Marker, type Op,
@@ -29,7 +29,10 @@
 
   type Mode = "text" | "semantic";
   type Span = { from: number; to: number };
-  type Source = { kind: "file" | "dir"; path: string };
+  /** A file, a folder, or a Kustomize/Helm folder shown as its rendered output. */
+  type Source = { kind: "file" | "dir" | "render"; path: string; tool?: RenderTool; values?: string[] };
+  /** Rendered output is compared like a single file. */
+  const shape = (k: Source["kind"]) => (k === "dir" ? "dir" : "file");
 
   let raw: DiffView;
   let sem: DiffView;
@@ -156,24 +159,42 @@
   }
 
   async function openPath(side: Side, path: string) {
-    const kind = await pathKind(path);
-    if (kind === "missing") return message(t("notExist", { path }), { title: t("cannotOpen"), kind: "error" });
+    const found = await pathKind(path);
+    if (found === "missing") return message(t("notExist", { path }), { title: t("cannotOpen"), kind: "error" });
+    let src: Source = { kind: found, path };
+    if (found === "dir") {
+      const tool = await projectKind(path);
+      if (tool) {
+        const rendered = await ask(t("renderAsk", { name: baseName(path), tool: tool === "helm" ? "Helm" : "Kustomize" }), {
+          title: tool === "helm" ? "Helm" : "Kustomize", kind: "info", okLabel: t("renderRendered"), cancelLabel: t("renderFiles"),
+        });
+        if (rendered) {
+          let values: string[] = [];
+          if (tool === "helm") {
+            const picked = await open({ multiple: true, directory: false, defaultPath: path, filters, title: t("pickValues") });
+            values = Array.isArray(picked) ? picked : typeof picked === "string" ? [picked] : [];
+          }
+          src = { kind: "render", path, tool, values };
+        }
+      }
+    }
     if (!(await confirmDiscard(side))) return;
 
     // A folder on one side and a file on the other cannot be compared: reset the other side.
     const other = otherSide(side);
-    if (sources[other] && sources[other]!.kind !== kind) {
+    if (sources[other] && shape(sources[other]!.kind) !== shape(src.kind)) {
       if (!(await confirmDiscard(other))) return;
       sources[other] = null;
       entries = [];
     }
     ops = ops.filter((o) => o.side !== side);
     try {
-      if (kind === "file") await loadFile(side, path);
+      if (src.kind === "file") await loadFile(side, path);
+      else if (src.kind === "render") await loadRender(side, src);
       else await loadDir(side, path);
-      sources[side] = { kind, path };
+      sources[side] = src;
     } catch (e) {
-      return message(String(e), { title: t("cannotOpen"), kind: "error" });
+      return message(String(e), { title: src.kind === "render" ? t("renderFailed") : t("cannotOpen"), kind: "error" });
     }
     const keep = entries[current]?.rel;
     let i = entries.findIndex((e) => e.rel === keep);
@@ -181,15 +202,53 @@
     selectEntry(Math.max(0, Math.min(i, entries.length - 1)));
   }
 
-  async function loadFile(side: Side, path: string) {
-    // Stamp first: a change made while reading is then still noticed later.
-    const [stamp] = await fileStamps([path]);
-    const { text, eol, bom } = decodeText(await readText(path));
-    const buf: Buf = { path, saved: text, text, exists: true, eol, bom, stamp };
+  /** Put a buffer on one side of the single file pair. */
+  function setSingle(side: Side, buf: Buf) {
     const e = entries.length === 1 && entries[0].rel === "" ? entries[0] : { rel: "", status: "equal" as const };
     e[side] = buf;
     e.status = statusOf(e, undefined, opts);
     entries = [e];
+  }
+
+  async function loadRender(side: Side, src: Source) {
+    const { text } = decodeText(await render(src.tool!, src.path, src.values));
+    setSingle(side, { path: src.path, saved: text, text, exists: true, eol: "\n", bom: false, readonly: true });
+  }
+
+  /** Run kustomize/helm again for a rendered side; returns whether the output changed. */
+  async function rerender(side: Side, quiet = false): Promise<boolean> {
+    const src = sources[side];
+    const e = entries[0];
+    if (src?.kind !== "render" || !e?.[side]) return false;
+    let text: string;
+    try {
+      text = decodeText(await render(src.tool!, src.path, src.values)).text;
+    } catch (err) {
+      if (quiet) showNotice(`${t("renderFailed")}: ${String(err).split("\n")[0]}`);
+      else await message(String(err), { title: t("renderFailed"), kind: "error" });
+      return false;
+    }
+    const buf = e[side]!;
+    if (sources[side] !== src || buf.text === text) return false;
+    buf.text = buf.saved = text;
+    if (e === entries[current]) {
+      raw.setDocSoft(side, text, true);
+      recompute();
+    } else e.status = statusOf(e, undefined, opts);
+    return true;
+  }
+
+  /** "kustomize build" / "helm template -f values-prod.yaml" for the header. */
+  function renderLabel(src: Source): string {
+    if (src.tool === "kustomize") return "kustomize build";
+    return ["helm template", ...(src.values ?? []).map((v) => `-f ${baseName(v)}`)].join(" ");
+  }
+
+  async function loadFile(side: Side, path: string) {
+    // Stamp first: a change made while reading is then still noticed later.
+    const [stamp] = await fileStamps([path]);
+    const { text, eol, bom } = decodeText(await readText(path));
+    setSingle(side, { path, saved: text, text, exists: true, eol, bom, stamp });
   }
 
   async function loadDir(side: Side, root: string) {
@@ -220,7 +279,12 @@
     current = i;
     const e = entries[i];
     loading = true;
-    for (const side of ["a", "b"] as const) raw.setDoc(side, e?.[side]?.text ?? "", e?.[side]?.path ?? e?.rel ?? null, true);
+    for (const side of ["a", "b"] as const) {
+      const buf = e?.[side];
+      raw.setDoc(side, buf?.text ?? "", buf?.readonly ? "rendered.yaml" : buf?.path ?? e?.rel ?? null, true);
+      raw.setReadOnly(side, !!buf?.readonly);
+      sem.setReadOnly(side, !!buf?.readonly);
+    }
     loading = false;
     for (const side of ["a", "b"] as const) sem.setDoc(side, "", "normalized.yaml", true);
     recompute();
@@ -316,10 +380,15 @@
       const keepRel = entries[current]?.rel;
       const reloaded: string[] = [], deleted: string[] = [];
       let structural = rescan && dirMode && (await addNewFiles()) > 0;
+      // Rendered sides: their sources may live anywhere (bases, values…), so just render again.
+      const rerendered: string[] = [];
+      if (rescan)
+        for (const side of ["a", "b"] as const)
+          if (sources[side]?.kind === "render" && (await rerender(side, true))) rerendered.push(baseName(sources[side]!.path));
       const added = structural;
       let touchedCurrent = false;
 
-      const items = entries.flatMap((e) => (["a", "b"] as const).flatMap((side) => (e[side] ? [{ e, side, buf: e[side]! }] : [])));
+      const items = entries.flatMap((e) => (["a", "b"] as const).flatMap((side) => (e[side] && !e[side]!.readonly ? [{ e, side, buf: e[side]! }] : [])));
       const stamps = await fileStamps(items.map((x) => x.buf.path));
       for (const [i, { e, side, buf }] of items.entries()) {
         const stamp = stamps[i];
@@ -375,6 +444,7 @@
 
       const parts: string[] = [];
       const list = (names: string[]) => names.slice(0, 3).join(", ") + (names.length > 3 ? ` +${names.length - 3}` : "");
+      if (rerendered.length) parts.push(t("rerendered", { names: rerendered.join(", ") }));
       if (reloaded.length) parts.push(t("reloadedFromDisk", { names: list(reloaded) }));
       if (deleted.length) parts.push(t("deletedOnDisk", { names: list(deleted) }));
       if (added) parts.push(t("newFilesOnDisk"));
@@ -402,6 +472,7 @@
     }
     if (!items.length) return;
     const target: Side = dir === "a-to-b" ? "b" : "a";
+    if (await refuseRendered(target)) return;
     const before = raw.getDoc(target);
     const existed = !!entries[current]?.[target];
     const plan = planApply(items, dir, before);
@@ -465,8 +536,9 @@
   }
 
   /** Arrow in the text view: copy the block like Meld, recorded for undo. */
-  function onTextArrow(chunk: Chunk, dir: Direction) {
+  async function onTextArrow(chunk: Chunk, dir: Direction) {
     const target: Side = dir === "a-to-b" ? "b" : "a";
+    if (await refuseRendered(target)) return;
     const before = raw.getDoc(target);
     raw.copyChunk(chunk, dir);
     const after = raw.getDoc(target);
@@ -474,6 +546,13 @@
       const anchor = target === "b" ? chunk.fromB : chunk.fromA;
       record({ rel: entries[current]?.rel ?? "", side: target, label: `${dir === "a-to-b" ? "→" : "←"} ${t("textBlock")}`, before, after, anchor });
     }
+  }
+
+  /** Rendered output cannot be changed: say so instead. */
+  async function refuseRendered(side: Side): Promise<boolean> {
+    if (!entries[current]?.[side]?.readonly) return false;
+    await message(t("renderedReadOnly"), { title: t("renderRendered"), kind: "info" });
+    return true;
   }
 
   /** Replace one side's whole text as a single undoable, recorded step. */
@@ -830,20 +909,26 @@
               <button onclick={() => pick(side, false)} title={side === "a" ? t("openFileLeft") + hk("openFileLeft") : t("openFileRight") + hk("openFileRight")}>{t("openFile")}</button>
               <button onclick={() => pick(side, true)} title={side === "a" ? t("openFolderLeft") + hk("openFolderLeft") : t("openFolderRight") + hk("openFolderRight")}>{t("openFolder")}</button>
             </div>
-            <span class="path" title={buf?.path ?? src?.path ?? ""}>
+            <span class="path" title={src?.kind === "render" ? `${renderLabel(src)}\n${src.path}` : buf?.path ?? src?.path ?? ""}>
               {#if !src}
                 <i>{t("dropHere")}</i>
               {:else if dirMode}
                 <b>{entry ? entry.rel : "—"}{isDirty(buf) ? " ✎" : ""}{entry && !buf ? ` ${t("missing")}` : ""}</b>
                 <small>{src.path}</small>
+              {:else if src.kind === "render"}
+                <b>{baseName(src.path)}</b>
+                <small><span class="tool">{renderLabel(src)}</span> · {src.path}</small>
               {:else}
                 <b>{baseName(src.path)}{isDirty(buf) ? " ✎" : ""}</b>
                 <small>{src.path}</small>
               {/if}
             </span>
             {#if kindBadge(side)}<span class="badge" title={kindBadge(side)}>{kindBadge(side)}</span>{/if}
-            <button onclick={() => formatSide(side)} disabled={!buf} title={t("formatTitle")}>{t("format")}</button>
-            <button onclick={() => alignSide(side)} disabled={!buf || !entry?.[otherSide(side)]}
+            {#if src?.kind === "render"}
+              <button onclick={() => rerender(side)} title={t("rerender")}>↻</button>
+            {/if}
+            <button onclick={() => formatSide(side)} disabled={!buf || buf.readonly} title={t("formatTitle")}>{t("format")}</button>
+            <button onclick={() => alignSide(side)} disabled={!buf || buf.readonly || !entry?.[otherSide(side)]}
               title={side === "a" ? t("alignTitleRight") : t("alignTitleLeft")}>{t("align")}</button>
             <button onclick={() => save(side)} disabled={!isDirty(buf)} title={t("saveTitle") + hk("save")}>{t("save")}</button>
           </div>
@@ -879,6 +964,8 @@
     {#if mode === "semantic"}
       {#if semError}
         <span class="error" title={semError}>{semError}</span>
+      {:else if entry?.a?.readonly || entry?.b?.readonly}
+        <span class="hint">{t("renderedHint")}</span>
       {:else}
         <span class="hint">{t("semanticHint", { key: formatCombo(settings.hotkeys.showInSource) })}</span>
       {/if}
@@ -917,6 +1004,7 @@
   footer { display: flex; align-items: center; gap: 8px; padding: 4px 10px; background: var(--panel); border-top: 1px solid var(--border); font-size: 12px; white-space: nowrap; }
   .hint { color: var(--muted); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .error { color: var(--removed); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .tool { font-weight: 400; font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--accent); }
   .notice { color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; max-width: 40%; }
   .spacer { flex: 1; }
   label { display: flex; align-items: center; gap: 4px; }

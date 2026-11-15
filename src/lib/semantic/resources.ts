@@ -82,7 +82,7 @@ export function parseResources(text: string): { resources: Resource[]; errors: P
  * namespace is omitted on one side matches the same group/kind/name on the
  * other (a manifest without namespace vs a live object in some namespace).
  */
-export function matchResources(as: Resource[], bs: Resource[]): Array<[Resource?, Resource?]> {
+export function matchResources(as: Resource[], bs: Resource[], crossNamespace = true): Array<[Resource?, Resource?]> {
   const pairs: Array<[Resource?, Resource?]> = [];
   const freeB = new Map(bs.map((r) => [r.key, r]));
   const unmatchedA: Resource[] = [];
@@ -108,6 +108,27 @@ export function matchResources(as: Resource[], bs: Resource[]): Array<[Resource?
     if (found) freeB.delete(found.key);
     pairs.push([a, found]);
   }
+
+  // Environments often differ only by namespace (overlays for shop-stage and
+  // shop-prod): pair group/kind/name across namespaces when that is unambiguous,
+  // i.e. there is exactly one such resource left on each side.
+  const gkn = (r: Resource) => r.id && `${r.id.group}/${r.id.kind}/${r.id.name}`;
+  const count = (rs: Iterable<Resource>) => {
+    const m = new Map<string, number>();
+    for (const r of rs) { const k = gkn(r); if (k) m.set(k, (m.get(k) ?? 0) + 1); }
+    return m;
+  };
+  const leftA = crossNamespace ? pairs.filter((p) => p[0] && !p[1]) : [];
+  const countA = count(leftA.map((p) => p[0]!));
+  const countB = count(freeB.values());
+  for (const p of leftA) {
+    const k = gkn(p[0]!);
+    if (!k || countA.get(k) !== 1 || countB.get(k) !== 1) continue;
+    const b = [...freeB.values()].find((r) => gkn(r) === k)!;
+    freeB.delete(b.key);
+    p[1] = b;
+  }
+
   for (const b of freeB.values()) pairs.push([undefined, b]);
   return pairs;
 }

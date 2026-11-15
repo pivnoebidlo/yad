@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Compartment, Transaction, type ChangeDesc } from "@codemirror/state";
+  import { Compartment, EditorState, Transaction, type ChangeDesc } from "@codemirror/state";
   import { EditorView } from "@codemirror/view";
   import { MergeView, goToNextChunk, goToPreviousChunk, type Chunk } from "@codemirror/merge";
   import { history, undo as cmUndo, redo as cmRedo } from "@codemirror/commands";
@@ -38,8 +38,8 @@
   let host: HTMLDivElement;
   let mv: MergeView | undefined;
   const comp = {
-    a: { language: new Compartment(), theme: new Compartment(), history: new Compartment() },
-    b: { language: new Compartment(), theme: new Compartment(), history: new Compartment() },
+    a: { language: new Compartment(), theme: new Compartment(), history: new Compartment(), ro: new Compartment() },
+    b: { language: new Compartment(), theme: new Compartment(), history: new Compartment(), ro: new Compartment() },
   };
 
   const collapseConf = (on: boolean) => (on ? { margin: 3, minSize: 6 } : undefined);
@@ -168,6 +168,7 @@
 
   onMount(() => {
     const ext = (side: Side) => [
+      comp[side].ro.of([]),
       baseSetup({
         ...comp[side], lang: "plain", theme0: theme, readonly,
         onChange: () => changed(side),
@@ -234,6 +235,11 @@
       v.dispatch({ effects: comp[side].history.reconfigure([]) });
       v.dispatch({ effects: comp[side].history.reconfigure(history()) });
     }
+  }
+
+  /** Make one side read-only (generated text) or editable again. */
+  export function setReadOnly(side: Side, on: boolean) {
+    view(side).dispatch({ effects: comp[side].ro.reconfigure(on ? EditorState.readOnly.of(true) : []) });
   }
 
   export function cursor(side: Side): number {
