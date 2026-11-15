@@ -36,7 +36,7 @@ export interface MergeResult {
 type Touch = Touched & { label: string };
 
 /** Merging must see every field and pair resources only by their exact identity. */
-const mergeOptions = (o: Partial<CompareOptions>): Partial<CompareOptions> => ({ ...o, ignore: [], crossNamespace: false });
+const mergeOptions = (o: Partial<CompareOptions>): Partial<CompareOptions> => ({ ...o, ignore: [], crossNamespace: false, pairRenamed: false });
 
 const segEq = (x: PathSeg, y: PathSeg) =>
   typeof x === "object" && typeof y === "object" ? x.key === y.key && x.value === y.value : x === y;

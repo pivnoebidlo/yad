@@ -17,6 +17,7 @@ export interface Settings {
   ignorePaths: string[];
   emptyEqualsMissing: boolean;
   crossNamespace: boolean;
+  pairRenamed: boolean;
   decodeSecrets: boolean;
   /** Look for a new release on start. */
   autoUpdate: boolean;
@@ -39,6 +40,7 @@ export const defaultSettings = (): Settings => ({
   ignorePaths: defaultIgnorePaths(),
   emptyEqualsMissing: true,
   crossNamespace: true,
+  pairRenamed: true,
   decodeSecrets: true,
   autoUpdate: true,
   formatIndent: 2,
@@ -93,9 +95,10 @@ export function compareOptions(): CompareOptions {
   return {
     ignore: settings.ignoreNoise ? settings.ignorePaths.map(parsePath).filter((p): p is string[] => !!p) : [],
     mergeKeys: { ...DEFAULT_MERGE_KEYS },
-    fallbackMergeKeys: ["name"],
+    fallbackMergeKeys: ["name", "id"],
     emptyEqualsMissing: settings.emptyEqualsMissing,
     crossNamespace: settings.crossNamespace,
+    pairRenamed: settings.pairRenamed,
     decodeSecrets: settings.decodeSecrets,
   };
 }

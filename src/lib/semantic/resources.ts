@@ -1,4 +1,4 @@
-import { LineCounter, isMap, isScalar, isSeq, parseAllDocuments, type Node, type YAMLMap } from "yaml";
+import { LineCounter, isMap, isScalar, isSeq, parseAllDocuments, visit, type Node, type Pair, type YAMLMap } from "yaml";
 import type { ParseError, Resource, ResourceId, SourceCtx } from "./types";
 import { deref, getMap, getScalar, getPair, nodeRange, toJS } from "./util";
 import { detectKind } from "./kinds";
@@ -28,11 +28,12 @@ export const idLabel = (id: ResourceId) =>
  * Split a YAML/JSON text into resources. Multi-document streams and
  * `kind: List` (as produced by `kubectl get -o yaml`) are flattened.
  */
-export function parseResources(text: string): { resources: Resource[]; errors: ParseError[] } {
+export function parseResources(text: string): { resources: Resource[]; errors: ParseError[]; warnings: ParseError[] } {
   const lc = new LineCounter();
-  const docs = parseAllDocuments(text, { lineCounter: lc, prettyErrors: false });
+  const docs = parseAllDocuments(text, { lineCounter: lc, prettyErrors: false, uniqueKeys: false });
   const resources: Resource[] = [];
   const errors: ParseError[] = [];
+  const warnings: ParseError[] = [];
   const list = Array.isArray(docs) ? docs : [];
   const seen = new Map<string, number>();
 
@@ -58,6 +59,7 @@ export function parseResources(text: string): { resources: Resource[]; errors: P
     const ctx: SourceCtx = { doc, lc, text };
     for (const e of doc.errors)
       errors.push({ message: e.message, line: lc.linePos(e.pos[0]).line });
+    dropDuplicateKeys(doc, lc, warnings);
     const root = deref(doc.contents, ctx);
     if (root == null || (isScalar(root) && root.value == null)) return;
     if (isMap(root)) {
@@ -74,7 +76,30 @@ export function parseResources(text: string): { resources: Resource[]; errors: P
     add(root, ctx, `#${docIndex + 1}`);
   });
 
-  return { resources, errors };
+  return { resources, errors, warnings };
+}
+
+/**
+ * A key repeated in one map is invalid YAML, yet real files have it (and many
+ * tools silently take the last value). Keep the last pair, so the comparison
+ * shows what those tools see, and warn about each earlier one.
+ */
+function dropDuplicateKeys(doc: Parameters<typeof visit>[0], lc: LineCounter, warnings: ParseError[]) {
+  visit(doc, {
+    Map(_, map) {
+      const last = new Map<string, Pair>();
+      for (const p of map.items as Pair[]) last.set(isScalar(p.key) ? String(p.key.value) : String(p.key), p);
+      if (last.size === map.items.length) return;
+      map.items = (map.items as Pair[]).filter((p) => {
+        const k = isScalar(p.key) ? String(p.key.value) : String(p.key);
+        const keep = last.get(k)!;
+        if (keep === p) return true;
+        const at = (n: unknown) => lc.linePos((n as Node).range?.[0] ?? 0).line;
+        warnings.push({ line: at(keep.key), message: `duplicate key "${k}": the one at line ${at(p.key)} is ignored` });
+        return false;
+      });
+    },
+  });
 }
 
 /**
@@ -82,7 +107,7 @@ export function parseResources(text: string): { resources: Resource[]; errors: P
  * namespace is omitted on one side matches the same group/kind/name on the
  * other (a manifest without namespace vs a live object in some namespace).
  */
-export function matchResources(as: Resource[], bs: Resource[], crossNamespace = true): Array<[Resource?, Resource?]> {
+export function matchResources(as: Resource[], bs: Resource[], crossNamespace = true, pairRenamed = false): Array<[Resource?, Resource?]> {
   const pairs: Array<[Resource?, Resource?]> = [];
   const freeB = new Map(bs.map((r) => [r.key, r]));
   const unmatchedA: Resource[] = [];
@@ -129,6 +154,34 @@ export function matchResources(as: Resource[], bs: Resource[], crossNamespace = 
     p[1] = b;
   }
 
+  // Names that carry the environment (elk-stage vs elk-prod): pair the last
+  // resource of a group/kind left on each side, if there is exactly one and
+  // the names look related (same first or last word, see `relatedNames`).
+  if (pairRenamed) {
+    const gk = (r: Resource) => r.id && `${r.id.group}/${r.id.kind}`;
+    const leftA2 = pairs.filter((p) => p[0] && !p[1]);
+    const countA2 = new Map<string, number>(), countB2 = new Map<string, number>();
+    for (const p of leftA2) { const k = gk(p[0]!); if (k) countA2.set(k, (countA2.get(k) ?? 0) + 1); }
+    for (const b of freeB.values()) { const k = gk(b); if (k) countB2.set(k, (countB2.get(k) ?? 0) + 1); }
+    for (const p of leftA2) {
+      const k = gk(p[0]!);
+      if (!k || countA2.get(k) !== 1 || countB2.get(k) !== 1) continue;
+      const b = [...freeB.values()].find((r) => gk(r) === k)!;
+      const a = p[0]!;
+      if (!relatedNames(a.id!.name, b.id!.name) || (!crossNamespace && a.id!.namespace !== b.id!.namespace)) continue;
+      freeB.delete(b.key);
+      p[1] = b;
+    }
+  }
+
   for (const b of freeB.values()) pairs.push([undefined, b]);
   return pairs;
+}
+
+/** `elk-stage` / `elk-prod`, `kedo-grk` / `kedo-eurochem`: the same first or last word. */
+export function relatedNames(x: string, y: string): boolean {
+  if (x === y) return true;
+  const wx = x.split(/[-._]/).filter(Boolean), wy = y.split(/[-._]/).filter(Boolean);
+  if (wx.length < 2 && wy.length < 2) return false;
+  return wx[0] === wy[0] || wx[wx.length - 1] === wy[wy.length - 1];
 }

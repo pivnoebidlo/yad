@@ -82,6 +82,8 @@ export interface ParseError {
 export interface CompareResult {
   resources: ResourceDiff[];
   errors: { a: ParseError[]; b: ParseError[] };
+  /** Problems that do not stop the comparison (a repeated key: the last one is used). */
+  warnings: { a: ParseError[]; b: ParseError[] };
 }
 
 export interface CompareOptions {
@@ -101,6 +103,11 @@ export interface CompareOptions {
   emptyEqualsMissing: boolean;
   /** Pair the same group/kind/name across namespaces when unambiguous (stage vs prod overlays). */
   crossNamespace: boolean;
+  /**
+   * Pair resources whose names differ (elk-stage vs elk-prod) when exactly one
+   * resource of that kind is left unpaired on each side.
+   */
+  pairRenamed: boolean;
   /** Show Secret `data` values decoded from base64 in the normalized view. */
   decodeSecrets: boolean;
 }

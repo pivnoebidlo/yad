@@ -1,6 +1,6 @@
 <script lang="ts">
   import { settings } from "./prefs.svelte";
-  import { decodeSecretValue, isSecret, formatPath, shortPath, type ApplyItem, type Change, type CompareResult, type Direction, type ResourceDiff, type ResourceStatus } from "./semantic";
+  import { decodeSecretValue, isMultiline, isSecret, summarizeTextChange, formatPath, shortPath, type ApplyItem, type Change, type CompareResult, type Direction, type ResourceDiff, type ResourceStatus } from "./semantic";
   import { t } from "./i18n.svelte";
   import { matcher } from "./filter";
 
@@ -50,6 +50,9 @@
     }
     return out;
   });
+  const warnings = $derived(
+    result ? [...result.warnings.a.map((e) => ({ side: t("sideLeftName"), ...e })), ...result.warnings.b.map((e) => ({ side: t("sideRightName"), ...e }))] : [],
+  );
   const errors = $derived(
     result ? [...result.errors.a.map((e) => ({ side: "Left", ...e })), ...result.errors.b.map((e) => ({ side: "Right", ...e }))] : [],
   );
@@ -66,6 +69,8 @@
       const to = c.path[c.path.length - 1] as number;
       return `${t("movedText", { from: (c.fromIndex ?? 0) + 1, to: to + 1 })} · ${short(c.b)}`;
     }
+    if (c.kind === "changed" && typeof c.a === "string" && typeof c.b === "string" && (isMultiline(c.a) || isMultiline(c.b)))
+      return summarizeTextChange(c.a, c.b, (s) => (s.length > 40 ? s.slice(0, 37) + "…" : s));
     if (c.kind === "changed") return `${short(c.a)} → ${short(c.b)}`;
     return short(c.kind === "added" ? c.b : c.a);
   }
@@ -84,6 +89,9 @@
 
   {#each errors as e}
     <div class="error">{e.side}, line {e.line}: {e.message}</div>
+  {/each}
+  {#each warnings as w}
+    <div class="warning">⚠ {w.side}, line {w.line}: {w.message}</div>
   {/each}
 
   <div class="filter">
@@ -145,6 +153,7 @@
   .items { overflow-y: auto; flex: 1; padding-bottom: 8px; }
   .filter { display: flex; padding: 4px 10px; border-bottom: 1px solid var(--border); }
   .filter input { flex: 1; min-width: 0; font-size: 12px; padding: 2px 6px; }
+  .warning { padding: 4px 10px; color: var(--changed); border-bottom: 1px solid var(--border); white-space: pre-wrap; }
   .error { padding: 4px 10px; color: var(--removed); border-bottom: 1px solid var(--border); white-space: pre-wrap; }
   .empty { padding: 16px 10px; color: var(--muted); text-align: center; }
   button { all: unset; box-sizing: border-box; cursor: default; }

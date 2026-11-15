@@ -15,7 +15,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import {
-  DEFAULT_IGNORE, compareTexts, decodeSecretValue, defaultOptions, formatPath, formatText, hideSecretValue, isSecretKey, merge3, parsePath, presentSecrets, resolveConflict,
+  DEFAULT_IGNORE, isMultiline, lineDiff, summarizeTextChange, compareTexts, decodeSecretValue, defaultOptions, formatPath, formatText, hideSecretValue, isSecretKey, merge3, parsePath, presentSecrets, resolveConflict,
   type Change, type MergeConflict, type CompareOptions, type FormatOptions, type ResourceDiff,
 } from "../lib/semantic";
 import { decodeText, encodeText } from "../lib/textio";
@@ -46,6 +46,7 @@ diff options:
   --no-default-ignore           do not ignore status, managedFields, uid, resourceVersion…
   --strict-empty                {} and [] are not the same as a missing key
   --no-cross-namespace          never pair resources from different namespaces
+  --no-pair-renamed             never pair resources with different names (elk-stage / elk-prod)
   --order-matters               files that differ only in order/formatting count as different
   --show-secrets                show Secret values decoded (default: hidden, safe for CI logs)
   --no-config                   do not read .yad.yaml (diff, format, merge)
@@ -100,7 +101,7 @@ function parseArgs(args: string[]): Flags {
 }
 
 const KNOWN = {
-  diff: ["--output", "--ignore", "--no-default-ignore", "--strict-empty", "--no-cross-namespace", "--order-matters", "--show-secrets", "--no-config", "-q", "--quiet"],
+  diff: ["--output", "--ignore", "--no-default-ignore", "--strict-empty", "--no-cross-namespace", "--no-pair-renamed", "--order-matters", "--show-secrets", "--no-config", "-q", "--quiet"],
   merge: ["-o", "--out", "--prefer", "--show-secrets", "--no-config", "-q", "--quiet"],
   format: ["--no-config", "--write", "--indent", "--flush-lists", "--no-sort-k8s", "-q", "--quiet"],
 };
@@ -120,6 +121,7 @@ function compareOptions(f: Flags, cfg: ProjectConfig | null = null): CompareOpti
   }
   if (f.opts.has("--strict-empty")) o.emptyEqualsMissing = false;
   if (f.opts.has("--no-cross-namespace")) o.crossNamespace = false;
+  if (f.opts.has("--no-pair-renamed")) o.pairRenamed = false;
   return o;
 }
 
@@ -182,6 +184,8 @@ export interface FileReport {
   path: string;
   status: FileStatus;
   errors?: string[];
+  /** Problems that did not stop the comparison (repeated keys). */
+  warnings?: string[];
   resources: ResourceDiff[];
 }
 
@@ -194,7 +198,8 @@ export function diffTexts(path: string, a: string | null, b: string | null, opts
   const errors = [...r.errors.a.map((e) => `left: ${e.message.split("\n")[0]}`), ...r.errors.b.map((e) => `right: ${e.message.split("\n")[0]}`)];
   if (errors.length) return { path, status: "error", errors, resources: [] };
   const resources = r.resources.filter((x) => x.status !== "equal");
-  return { path, status: resources.length ? "changed" : "reordered", resources };
+  const warnings = [...r.warnings.a.map((e) => `left, line ${e.line}: ${e.message}`), ...r.warnings.b.map((e) => `right, line ${e.line}: ${e.message}`)];
+  return { path, status: resources.length ? "changed" : "reordered", resources, ...(warnings.length ? { warnings } : {}) };
 }
 
 export function diffPaths(left: string, right: string, opts: CompareOptions): FileReport[] {
@@ -222,8 +227,15 @@ function show(v: unknown): string {
   return s.length > 70 ? s.slice(0, 67) + "…" : s;
 }
 
-function changeLine(c: Change): { path: string; text: string } {
+function changeLine(c: Change): { path: string; text: string; detail?: string[] } {
   const path = formatPath(c.path);
+  // Embedded configs and scripts: the changed lines, not two truncated copies.
+  if (c.kind === "changed" && (isMultiline(c.a) || isMultiline(c.b)) && typeof c.a === "string" && typeof c.b === "string") {
+    const d = lineDiff(c.a, c.b);
+    const detail = d.slice(0, 40).map((l) => `${l.op} ${String(l.line).padStart(4)}| ${l.text}`);
+    if (d.length > 40) detail.push(`… ${d.length - 40} more`);
+    return { path, text: `text changed (${d.length} line${d.length === 1 ? "" : "s"})`, detail };
+  }
   switch (c.kind) {
     case "added": return { path, text: `added ${show(c.b)}` };
     case "removed": return { path, text: `removed ${show(c.a)}` };
@@ -251,15 +263,17 @@ export function renderText(reports: FileReport[], io: Pick<Io, "color">, orderMa
   const mark = { added: c("32", "+"), removed: c("31", "-"), changed: c("33", "~"), equal: " " };
   const lines: string[] = [];
   for (const r of reports) {
-    if (!differs(r, orderMatters) && r.status !== "reordered") continue;
+    if (!differs(r, orderMatters) && r.status !== "reordered" && !r.warnings) continue;
     lines.push(`${c("1", r.path)}: ${STATUS_TEXT[r.status]}`);
     for (const e of r.errors ?? []) lines.push(`  ${c("31", e)}`);
+    for (const w of r.warnings ?? []) lines.push(`  ${c("33", "warning: " + w)}`);
     for (const res of r.resources) {
       const tail = res.status === "added" ? " (only on the right)" : res.status === "removed" ? " (only on the left)" : "";
       lines.push(`  ${mark[res.status]} ${res.label}${tail}`);
       for (const ch of res.changes) {
-        const { path, text } = changeLine(ch);
+        const { path, text, detail } = changeLine(ch);
         lines.push(`      ${c("36", path)}: ${text}`);
+        for (const d of detail ?? []) lines.push(`          ${c(d.startsWith("-") ? "31" : d.startsWith("+") ? "32" : "2", d)}`);
       }
     }
   }
@@ -275,12 +289,17 @@ export function renderMarkdown(reports: FileReport[], orderMatters = false): str
     if (!differs(r, orderMatters)) continue;
     out.push(`### \`${r.path}\` — ${STATUS_TEXT[r.status]}`, "");
     for (const e of r.errors ?? []) out.push(`- ${md(e)}`);
+    for (const w of r.warnings ?? []) out.push(`- ⚠️ ${md(w)}`);
     for (const res of r.resources) {
       const tail = res.status === "added" ? " — only on the right" : res.status === "removed" ? " — only on the left" : "";
       out.push(`**${md(res.label)}**${tail}`, "");
       if (res.changes.length) {
         out.push("| Path | Left | Right |", "|---|---|---|");
         for (const ch of res.changes) {
+          if (ch.kind === "changed" && typeof ch.a === "string" && typeof ch.b === "string" && (isMultiline(ch.a) || isMultiline(ch.b))) {
+            out.push(`| \`${md(formatPath(ch.path))}\` | text | ${md(summarizeTextChange(ch.a, ch.b, (s) => (s.length > 60 ? s.slice(0, 57) + "…" : s)))} |`);
+            continue;
+          }
           const left = ch.kind === "added" ? "" : ch.kind === "moved" ? `position ${(ch.fromIndex ?? 0) + 1}` : `\`${md(show(ch.a))}\``;
           const right = ch.kind === "removed" ? "" : ch.kind === "moved" ? "moved" : `\`${md(show(ch.b))}\``;
           out.push(`| \`${md(formatPath(ch.path))}\` | ${left} | ${right} |`);
@@ -299,6 +318,7 @@ export function renderJson(reports: FileReport[]): string {
       path: r.path,
       status: r.status,
       ...(r.errors ? { errors: r.errors } : {}),
+      ...(r.warnings ? { warnings: r.warnings } : {}),
       resources: r.resources.map((res) => ({
         resource: res.label,
         status: res.status,

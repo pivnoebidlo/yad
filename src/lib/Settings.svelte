@@ -142,6 +142,8 @@
         <p class="hint">{t("emptyEqualsMissingHint")}</p>
         <label class="check top"><input type="checkbox" bind:checked={settings.crossNamespace} /> {t("crossNamespace")}</label>
         <p class="hint">{t("crossNamespaceHint")}</p>
+        <label class="check top"><input type="checkbox" bind:checked={settings.pairRenamed} /> {t("pairRenamed")}</label>
+        <p class="hint">{t("pairRenamedHint")}</p>
         <label class="check top"><input type="checkbox" bind:checked={settings.decodeSecrets} /> {t("decodeSecrets")}</label>
         <p class="hint">{t("decodeSecretsHint")}</p>
       {:else if tab === "formatting"}

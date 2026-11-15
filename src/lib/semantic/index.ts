@@ -16,6 +16,7 @@ export { renderNormalized, normalizeResource, type NormalizedView } from "./norm
 export { planApply, applyEdits, type ApplyItem, type ApplyResult, type Direction, type Edit } from "./patch";
 export { merge3, resolveConflict, valueAt, type MergeConflict, type MergeResult } from "./merge3";
 export { decodeBase64Text, decodeSecretValue, encodeBase64Text, hideSecretValue, isSecret, isSecretKey, presentSecrets, HIDDEN } from "./secrets";
+export { isMultiline, lineDiff, summarizeTextChange, type LineChange } from "./textdiff";
 export { detectKind, optionsForKind, KIND_LABELS, PIPELINE_KINDS, type DocKind } from "./kinds";
 
 const sortKey = (r: ResourceDiff) => {
@@ -29,17 +30,18 @@ export function compareTexts(a: string, b: string, options: Partial<CompareOptio
   const pa = parseResources(a);
   const pb = parseResources(b);
 
-  const resources: ResourceDiff[] = matchResources(pa.resources, pb.resources, opts.crossNamespace).map(([ra, rb]) => {
+  const resources: ResourceDiff[] = matchResources(pa.resources, pb.resources, opts.crossNamespace, opts.pairRenamed).map(([ra, rb]) => {
     const r = (ra ?? rb)!;
-    if (!ra) return { key: r.key, label: r.label, status: "added", b: rb, changes: [] };
-    if (!rb) return { key: r.key, label: r.label, status: "removed", a: ra, changes: [] };
+    const label = ra?.id && rb?.id && ra.id.name !== rb.id.name ? `${ra.label} → ${rb.id.name}` : r.label;
+    if (!ra) return { key: r.key, label, status: "added", b: rb, changes: [] };
+    if (!rb) return { key: r.key, label, status: "removed", a: ra, changes: [] };
     const kopts = optionsForKind(ra.docKind === rb.docKind ? ra.docKind : "yaml", opts);
     const changes = diffNodes(ra.node, rb.node, ra.ctx, rb.ctx, kopts, kopts.ignore);
-    return { key: r.key, label: r.label, status: changes.length ? "changed" : "equal", a: ra, b: rb, changes };
+    return { key: r.key, label, status: changes.length ? "changed" : "equal", a: ra, b: rb, changes };
   });
 
   resources.sort((x, y) => (sortKey(x) < sortKey(y) ? -1 : sortKey(x) > sortKey(y) ? 1 : 0));
-  return { resources, errors: { a: pa.errors, b: pb.errors } };
+  return { resources, errors: { a: pa.errors, b: pb.errors }, warnings: { a: pa.warnings, b: pb.warnings } };
 }
 
 /** What an apply touched in the target: a resource (by its key in the target) or a path in it. */
