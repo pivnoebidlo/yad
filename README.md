@@ -119,6 +119,14 @@ files=$(git diff --cached --name-only --diff-filter=ACM -- '*.yaml' '*.yml' '*.j
 [ -z "$files" ] || node yad-cli.mjs format $files
 ```
 
+## Tabs and history
+
+Each tab is a separate comparison with its own files, unsaved edits and
+History. On start YAD reopens the tabs from last time (files are read again;
+unsaved edits are not kept) — not when started by git or with paths to
+compare. An empty tab lists recent comparisons. Both can be turned off or
+cleared in Settings → General.
+
 ## Settings
 
 ⌘, (or the gear in the bottom bar): language (English / Русский), theme,
@@ -161,6 +169,8 @@ file, and explicit flags win over it.
 | ⌥⌘↓ / ⌥⌘↑ | Next / previous file (folder mode) |
 | ⌘1 / ⌘2 | Semantic view (normalized, editable) / Source view (files as on disk) |
 | ⌘J | Show the place under the cursor in Source |
+| ⌘T / ⌘W | New tab / close tab |
+| ⇧⌘] / ⇧⌘[ | Next / previous tab |
 | ⌘B | Toggle side panel |
 | ⇧⌘F | Filter files (folder mode), press again — filter changes |
 | ⌘, | Settings |

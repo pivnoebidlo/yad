@@ -15,9 +15,11 @@
     project?: string | null;
     /** "Check for updates" in About. */
     oncheckupdate?: () => void;
+    /** Forget recent comparisons. */
+    onclearrecent?: () => void;
     onclose: () => void;
   }
-  let { tab = $bindable("general"), project = null, oncheckupdate, onclose }: Props = $props();
+  let { tab = $bindable("general"), project = null, oncheckupdate, onclearrecent, onclose }: Props = $props();
 
   const REPO = "https://github.com/pivnoebidlo/yad";
   let version = $state("");
@@ -129,6 +131,9 @@
             {#each themes as th}<option value={th}>{themeLabel(th)}</option>{/each}
           </select>
         </label>
+        <label class="check top"><input type="checkbox" bind:checked={settings.restoreSession} /> {t("restoreSession")}</label>
+        <p class="hint">{t("restoreSessionHint")}</p>
+        {#if onclearrecent}<div><button onclick={onclearrecent}>{t("clearRecent")}</button></div>{/if}
         <label class="check top"><input type="checkbox" bind:checked={settings.autoUpdate} /> {t("autoUpdate")}</label>
         <p class="hint">{t("autoUpdateHint")}</p>
       {:else if tab === "comparison"}

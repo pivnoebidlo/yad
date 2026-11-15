@@ -8,6 +8,7 @@ export const ACTIONS = [
   "settings", "save", "saveAll",
   "openFileLeft", "openFileRight", "openFolderLeft", "openFolderRight",
   "modeSemantic", "modeSource", "showInSource", "toggleSidebar", "filter",
+  "newTab", "closeTab", "nextTab", "prevTab",
   "prevDiff", "nextDiff", "prevFile", "nextFile",
 ] as const;
 export type ActionId = (typeof ACTIONS)[number];
@@ -26,6 +27,10 @@ export const DEFAULT_HOTKEYS: Record<ActionId, string> = {
   showInSource: "Mod+J",
   toggleSidebar: "Mod+B",
   filter: "Mod+Shift+F",
+  newTab: "Mod+T",
+  closeTab: "Mod+W",
+  nextTab: "Mod+Shift+]",
+  prevTab: "Mod+Shift+[",
   prevDiff: "Alt+ArrowUp",
   nextDiff: "Alt+ArrowDown",
   prevFile: "Mod+Alt+ArrowUp",
