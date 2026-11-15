@@ -63,9 +63,12 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) -> std::io::Result<()> {
         }
         let path = entry.path();
         let ft = entry.file_type()?;
+        // Symlinked files count (`git difftool -d` links the working tree files);
+        // symlinked folders are not followed, so a link loop cannot hang the walk.
+        let is_file = ft.is_file() || (ft.is_symlink() && std::fs::metadata(&path).is_ok_and(|m| m.is_file()));
         if ft.is_dir() {
             walk(root, &path, out)?;
-        } else if ft.is_file() && is_manifest(&path) {
+        } else if is_file && is_manifest(&path) {
             if out.len() >= MAX_FILES {
                 return Err(std::io::Error::other(format!("more than {MAX_FILES} files")));
             }
@@ -186,6 +189,20 @@ mod tests {
         assert_eq!(project_kind(d.to_string_lossy().into()), Some("helm"));
         std::fs::write(d.join("Chart.yaml"), "name: Bad Name\n").unwrap();
         assert_eq!(chart_name(&d), "release");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_files_follows_file_symlinks_only() {
+        let d = std::env::temp_dir().join(format!("yad-walk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("sub")).unwrap();
+        std::fs::write(d.join("real.yaml"), "a: 1\n").unwrap();
+        std::os::unix::fs::symlink(d.join("real.yaml"), d.join("sub/link.yaml")).unwrap();
+        std::os::unix::fs::symlink(&d, d.join("sub/loop")).unwrap();
+        let files = list_files(d.to_string_lossy().into()).unwrap();
+        assert_eq!(files, vec!["real.yaml", "sub/link.yaml"]);
         std::fs::remove_dir_all(&d).unwrap();
     }
 }

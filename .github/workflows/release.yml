@@ -29,6 +29,7 @@ jobs:
           - **macOS**: `.dmg` — `aarch64` for Apple Silicon, `x64` for Intel
           - **Linux**: `.AppImage`, `.deb` or `.rpm`
           - **Windows**: `.msi` or `-setup.exe`
+          - **Command line** (any OS with Node.js 18+): `yad-cli.mjs` — `node yad-cli.mjs --help`
 
           > The macOS build is not notarized yet. After copying YAD to
           > Applications, run once:
@@ -38,6 +39,26 @@ jobs:
             -f tag_name="$TAG" -f target_commitish="${{ github.sha }}" -f name="$NAME" \
             -F draft=true -F body=@notes.md --jq .id)
           echo "id=$id" >> "$GITHUB_OUTPUT"
+
+  # The command-line tool is plain JavaScript: one file for every platform.
+  cli:
+    needs: create-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: npm
+      - run: npm ci
+      - run: npm run build:cli
+      - name: Attach yad-cli.mjs to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api -X POST -H "Content-Type: application/javascript" \
+            "https://uploads.github.com/repos/${{ github.repository }}/releases/${{ needs.create-release.outputs.id }}/assets?name=yad-cli.mjs" \
+            --input dist-cli/yad-cli.mjs --jq .browser_download_url
 
   build:
     needs: create-release
