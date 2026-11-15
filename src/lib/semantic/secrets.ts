@@ -89,7 +89,7 @@ export function encodeSecretsInText(text: string, rawKeys: (resourceKey: string)
   docs.forEach((doc) => {
     const root = doc.contents;
     if (!isMap(root)) return;
-    const kind = root.get("kind"), api = root.get("apiVersion");
+    const kind: unknown = root.get("kind"), api: unknown = root.get("apiVersion");
     if (kind !== "Secret" || api !== "v1") return;
     const data = root.get("data", true);
     if (!isMap(data)) return;
