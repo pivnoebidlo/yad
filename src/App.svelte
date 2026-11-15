@@ -16,6 +16,9 @@
   import { settings, compareOptions, effectiveTheme, formatOptions } from "./lib/prefs.svelte";
   import { t, tn } from "./lib/i18n.svelte";
   import { getVersion } from "@tauri-apps/api/app";
+  import {
+    addRecent, clearRecent, loadRecent, loadSession, pairTitle, removeRecent, saveSession, type Recent, type Source as SessionSource,
+  } from "./lib/session";
   import { findUpdate, installUpdate, type Update } from "./lib/updates";
   import { CONFIG_NAME, applyProjectCompare, applyProjectFormat, parseProjectConfig, type ProjectConfig } from "./lib/projectConfig";
   import { actionFor, comboOf, formatCombo, type ActionId } from "./lib/hotkeys";
@@ -33,8 +36,8 @@
 
   type Mode = "text" | "semantic";
   type Span = { from: number; to: number };
-  /** A file, a folder, or a Kustomize/Helm folder shown as its rendered output. */
-  type Source = { kind: "file" | "dir" | "render"; path: string; tool?: RenderTool; values?: string[] };
+  /** A file, a folder, or a Kustomize/Helm folder shown as its rendered output (see session.ts). */
+  type Source = SessionSource;
   /** Rendered output is compared like a single file. */
   const shape = (k: Source["kind"]) => (k === "dir" ? "dir" : "file");
 
@@ -187,12 +190,24 @@
         }
       }
     }
-    if (!(await confirmDiscard(side))) return;
+    await openSource(side, src);
+  }
+
+  /**
+   * Load a decided source into one side of the current tab. `quiet` (reopening
+   * the last session) skips missing paths and failures instead of asking.
+   */
+  async function openSource(side: Side, src: Source, quiet = false): Promise<boolean> {
+    const path = src.path;
+    if (quiet && (await pathKind(path)) === "missing") return false;
+    // Replacing one side of a full pair keeps the selected file; a new pair starts at the first difference.
+    const hadPair = !!(sources.a && sources.b);
+    if (!(await confirmDiscard(side))) return false;
 
     // A folder on one side and a file on the other cannot be compared: reset the other side.
     const other = otherSide(side);
     if (sources[other] && shape(sources[other]!.kind) !== shape(src.kind)) {
-      if (!(await confirmDiscard(other))) return;
+      if (!(await confirmDiscard(other))) return false;
       sources[other] = null;
       entries = [];
     }
@@ -204,13 +219,119 @@
       sources[side] = src;
       await loadProjectConfig();
     } catch (e) {
-      return message(String(e), { title: src.kind === "render" ? t("renderFailed") : t("cannotOpen"), kind: "error" });
+      if (!quiet) await message(String(e), { title: src.kind === "render" ? t("renderFailed") : t("cannotOpen"), kind: "error" });
+      return false;
     }
-    const keep = entries[current]?.rel;
-    let i = entries.findIndex((e) => e.rel === keep);
+    const keep = hadPair ? entries[current]?.rel : undefined;
+    let i = keep === undefined ? -1 : entries.findIndex((e) => e.rel === keep);
     if (i < 0) i = entries.findIndex((e) => e.status !== "equal" && e.status !== "reordered");
     selectEntry(Math.max(0, Math.min(i, entries.length - 1)));
+    // Not for git difftool / scripted starts (temporary paths) and not while reopening the session.
+    if (sessionOn && sources.a && sources.b) recent = addRecent(recent, $state.snapshot(sources.a), $state.snapshot(sources.b));
+    return true;
   }
+
+  // ---- tabs, session and recent comparisons --------------------------------
+
+  /** Everything that belongs to one comparison; the active tab lives in the variables above. */
+  type TabState = {
+    id: number;
+    sources: Record<Side, Source | null>;
+    entries: Entry[];
+    current: number;
+    ops: Op[];
+    lastSide: Side | null;
+    project: typeof project;
+  };
+  let tabSeq = 1;
+  const emptyTab = (): TabState => ({ id: ++tabSeq, sources: { a: null, b: null }, entries: [], current: -1, ops: [], lastSide: null, project: null });
+  let tabs = $state<TabState[]>([{ ...emptyTab(), id: 1 }]);
+  let tabIndex = $state(0);
+  /** Remember open tabs for the next start (off when started by git or with paths). */
+  let sessionOn = $state(false);
+  let recent = $state<Recent[]>(loadRecent());
+
+  const liveTab = (): TabState => ({ id: tabs[tabIndex].id, sources, entries, current, ops, lastSide, project });
+  const tabOf = (i: number) => (i === tabIndex ? liveTab() : tabs[i]);
+  const tabDirty = (t: TabState) => t.entries.some((e) => isDirty(e.a) || isDirty(e.b));
+  const anyTabDirty = () => tabs.some((_, i) => tabDirty(tabOf(i)));
+
+  function loadTab(t: TabState) {
+    sources = t.sources;
+    entries = t.entries;
+    ops = t.ops;
+    lastSide = t.lastSide;
+    project = t.project;
+    semError = null;
+    selectEntry(t.entries.length ? Math.max(0, t.current) : -1);
+  }
+
+  function switchTab(i: number) {
+    if (i === tabIndex || i < 0 || i >= tabs.length || merge) return;
+    flushSemantic();
+    tabs[tabIndex] = liveTab();
+    tabIndex = i;
+    loadTab(tabs[i]);
+    void checkDisk(true); // files may have changed while the tab was in the background
+  }
+
+  function newTab() {
+    if (merge) return;
+    flushSemantic();
+    tabs[tabIndex] = liveTab();
+    tabs.push(emptyTab());
+    tabIndex = tabs.length - 1;
+    loadTab(tabs[tabIndex]);
+  }
+
+  async function closeTab(i = tabIndex) {
+    if (merge) return;
+    if (tabDirty(tabOf(i)) && !(await ask(t("closeTabDirty"), { title: t("unsavedTitle"), kind: "warning" }))) return;
+    flushSemantic();
+    if (tabs.length === 1) {
+      tabs[0] = emptyTab();
+      tabIndex = 0;
+      loadTab(tabs[0]);
+      return;
+    }
+    if (i !== tabIndex) {
+      tabs.splice(i, 1);
+      if (i < tabIndex) tabIndex--;
+      return;
+    }
+    tabs.splice(i, 1);
+    tabIndex = Math.min(i, tabs.length - 1);
+    loadTab(tabs[tabIndex]);
+    void checkDisk(true);
+  }
+
+  async function openRecent(r: Recent) {
+    if (sources.a || sources.b) newTab();
+    if (await openSource("a", r.a)) await openSource("b", r.b);
+  }
+
+  /** Reopen the tabs of the last session (missing paths are skipped). */
+  async function restoreSession() {
+    const saved = loadSession();
+    if (!saved) return;
+    for (const [i, pair] of saved.tabs.entries()) {
+      if (i > 0) newTab();
+      if (pair.a) await openSource("a", pair.a, true);
+      if (pair.b) await openSource("b", pair.b, true);
+    }
+    // Tabs whose files are all gone are dropped.
+    for (let i = tabs.length - 1; i >= 0 && tabs.length > 1; i--) {
+      const tb = tabOf(i);
+      if (!tb.sources.a && !tb.sources.b) await closeTab(i);
+    }
+    switchTab(Math.min(saved.active, tabs.length - 1));
+  }
+
+  $effect(() => {
+    if (!sessionOn) return;
+    const pairs = tabs.map((tb, i) => (i === tabIndex ? sources : tb.sources)).map((p) => $state.snapshot(p));
+    saveSession(pairs, tabIndex);
+  });
 
   /** Put a buffer on one side of the single file pair. */
   function setSingle(side: Side, buf: Buf) {
@@ -963,6 +1084,10 @@
         }
         break;
       case "toggleSidebar": sidebar = !sidebar; break;
+      case "newTab": newTab(); break;
+      case "closeTab": void closeTab(); break;
+      case "nextTab": switchTab((tabIndex + 1) % tabs.length); break;
+      case "prevTab": switchTab((tabIndex - 1 + tabs.length) % tabs.length); break;
       case "filter": {
         // Files first (folder mode), then the list of changes on the second press.
         sidebar = true;
@@ -1018,6 +1143,12 @@
     const win = getCurrentWindow();
     unlisten.push(
       win.onCloseRequested(async (ev) => {
+        if (!merge && anyTabDirty()) {
+          ev.preventDefault();
+          const ok = await ask(t("quitAnyway"), { title: t("unsavedTitle"), kind: "warning" });
+          if (ok) await win.destroy();
+          return;
+        }
         if (merge) {
           // git mergetool reads the exit code: 0 = merged, anything else = leave the file unmerged.
           ev.preventDefault();
@@ -1042,8 +1173,14 @@
       // Not while git waits for a merge, not in development builds.
       if (settings.autoUpdate && !import.meta.env.DEV) setTimeout(() => void checkUpdates(), 3000);
       const [a, b] = await initialPaths();
-      if (a) await openPath("a", a);
-      if (b) await openPath("b", b);
+      if (a || b) {
+        // Started with paths (git difftool, a script): just those, leave the saved session alone.
+        if (a) await openPath("a", a);
+        if (b) await openPath("b", b);
+        return;
+      }
+      if (settings.restoreSession) await restoreSession();
+      sessionOn = true;
     });
 
     return () => {
@@ -1057,6 +1194,22 @@
 <svelte:window onkeydowncapture={onhotkey} onkeydown={onkey} />
 
 <main>
+  {#if !merge}
+    <nav class="tabs" aria-label={t("tabs")}>
+      {#each tabs as tb, i (tb.id)}
+        {@const live = tabOf(i)}
+        <div class="tab" class:on={i === tabIndex} role="tab" tabindex="-1" aria-selected={i === tabIndex}
+          onmousedown={(e) => { if (e.button === 1) { e.preventDefault(); void closeTab(i); } }}>
+          <button class="tab-name" onclick={() => switchTab(i)}
+            title={[live.sources.a?.path, live.sources.b?.path].filter(Boolean).join("\n") || t("newTab")}>
+            {pairTitle(live.sources.a, live.sources.b, t("newTab"))}{tabDirty(live) ? " ✎" : ""}
+          </button>
+          <button class="tab-close" onclick={() => closeTab(i)} title={t("closeTab") + hk("closeTab")}>×</button>
+        </div>
+      {/each}
+      <button class="tab-new" onclick={newTab} title={t("newTab") + hk("newTab")}>+</button>
+    </nav>
+  {/if}
   <div class="body">
     {#if sidebar}
       {@const c = layout.collapsed}
@@ -1142,6 +1295,25 @@
       </header>
 
       <div class="views">
+        {#if !merge && !sources.a && !sources.b}
+          <div class="start">
+            <p class="start-hint">{t("startHint")}</p>
+            {#if recent.length}
+              <h3>{t("recentTitle")}</h3>
+              <ul>
+                {#each recent as r (r.at)}
+                  <li>
+                    <button class="recent" onclick={() => openRecent(r)} title={`${r.a.path}\n${r.b.path}`}>
+                      <b>{pairTitle(r.a, r.b, "")}</b>
+                      <small>{r.a.path} ↔ {r.b.path}</small>
+                    </button>
+                    <button class="recent-x" onclick={() => (recent = removeRecent(recent, r))} title={t("recentRemove")}>×</button>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+          </div>
+        {/if}
         <div class="view" class:hidden={mode !== "text"}>
           <DiffView bind:this={raw} {theme} {collapse} onarrow={onTextArrow} onchange={onRawChange} ontx={onRawTx}
             onchunks={(n) => (chunks = n)} markers={rawMarkers} {onmarker} />
@@ -1199,15 +1371,35 @@
 </main>
 
 {#if settingsOpen}
-  <Settings bind:tab={settingsTab} project={project?.path} oncheckupdate={() => checkUpdates(true)} onclose={() => (settingsOpen = false)} />
+  <Settings bind:tab={settingsTab} project={project?.path} onclearrecent={() => (recent = clearRecent())} oncheckupdate={() => checkUpdates(true)} onclose={() => (settingsOpen = false)} />
 {/if}
 
 <style>
   main { display: flex; flex-direction: column; height: 100vh; }
+  .tabs { flex: none; display: flex; align-items: stretch; gap: 1px; background: var(--border); border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
+  .tab { display: flex; align-items: center; min-width: 0; max-width: 260px; background: var(--bg); color: var(--muted); }
+  .tab.on { background: var(--panel); color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+  .tab-name { all: unset; cursor: default; padding: 5px 4px 5px 12px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tab-close { all: unset; cursor: default; padding: 0 8px; opacity: 0; font-size: 14px; }
+  .tab:hover .tab-close, .tab.on .tab-close { opacity: 0.7; }
+  .tab-close:hover { opacity: 1 !important; color: var(--text); }
+  .tab-new { all: unset; cursor: default; padding: 0 12px; background: var(--bg); color: var(--muted); font-size: 16px; }
+  .tab-new:hover { color: var(--text); }
+  .start { position: absolute; z-index: 5; inset: 0; overflow-y: auto; padding: 24px 32px; background: var(--bg); }
+  .start-hint { color: var(--muted); margin: 0 0 16px; }
+  .start h3 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+  .start ul { list-style: none; margin: 0; padding: 0; max-width: 900px; }
+  .start li { display: flex; align-items: center; border-radius: 6px; }
+  .start li:hover { background: var(--hover); }
+  .recent { all: unset; cursor: default; flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 6px 10px; }
+  .recent b, .recent small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .recent small { color: var(--muted); font-size: 11px; }
+  .recent-x { all: unset; cursor: default; padding: 0 10px; color: var(--muted); opacity: 0; }
+  .start li:hover .recent-x { opacity: 1; }
   .body { flex: 1; min-height: 0; display: flex; }
   aside { flex: none; display: flex; flex-direction: column; background: var(--panel); border-right: 1px solid var(--border); min-height: 0; overflow: hidden; }
   .work { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-  .views { flex: 1; min-height: 0; display: flex; }
+  .views { flex: 1; min-height: 0; display: flex; position: relative; }
   .view { flex: 1; min-width: 0; display: flex; }
   .view.hidden { display: none; }
   header { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--border); border-bottom: 1px solid var(--border); }

@@ -21,6 +21,8 @@ export interface Settings {
   decodeSecrets: boolean;
   /** Look for a new release on start. */
   autoUpdate: boolean;
+  /** Reopen the tabs of the last session on start. */
+  restoreSession: boolean;
   /** Formatting ("Format" button). */
   formatIndent: number;
   formatIndentSeq: boolean;
@@ -43,6 +45,7 @@ export const defaultSettings = (): Settings => ({
   pairRenamed: true,
   decodeSecrets: true,
   autoUpdate: true,
+  restoreSession: true,
   formatIndent: 2,
   formatIndentSeq: true,
   formatSortK8s: true,
