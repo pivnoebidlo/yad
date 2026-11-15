@@ -18,6 +18,8 @@ export interface Settings {
   emptyEqualsMissing: boolean;
   crossNamespace: boolean;
   decodeSecrets: boolean;
+  /** Look for a new release on start. */
+  autoUpdate: boolean;
   /** Formatting ("Format" button). */
   formatIndent: number;
   formatIndentSeq: boolean;
@@ -38,6 +40,7 @@ export const defaultSettings = (): Settings => ({
   emptyEqualsMissing: true,
   crossNamespace: true,
   decodeSecrets: true,
+  autoUpdate: true,
   formatIndent: 2,
   formatIndentSeq: true,
   formatSortK8s: true,
