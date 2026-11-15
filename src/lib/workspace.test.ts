@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decodeText, encodeText, isDirty, minimalEdit, storeEditorText, type Entry } from "./workspace";
+import { decodeText, diskChange, encodeText, isDirty, minimalEdit, storeEditorText, type Buf, type Entry } from "./workspace";
 
 const apply = (s: string, e: { from: number; to: number; insert: string }) => s.slice(0, e.from) + e.insert + s.slice(e.to);
 
@@ -49,5 +49,27 @@ describe("storeEditorText", () => {
     expect(e.a).toBeUndefined();
     storeEditorText(e, "a", "a: 1\n", "/stage");
     expect(e.a).toMatchObject({ path: "/stage/x/a.yaml", exists: false, eol: "\r\n" });
+  });
+});
+
+describe("diskChange", () => {
+  const buf = (saved: string, text = saved, exists = true): Buf => ({ path: "/x.yaml", saved, text, exists, eol: "\n", bom: false });
+  it("ignores a touch that did not change the content", () => {
+    expect(diskChange(buf("a: 1\n"), "a: 1\n")).toBe("same");
+    expect(diskChange(buf("a: 1\n", "a: 2\n"), "a: 1\n")).toBe("same");
+  });
+  it("reloads a clean buffer, or one whose edits match the disk", () => {
+    expect(diskChange(buf("a: 1\n"), "a: 2\n")).toBe("reload");
+    expect(diskChange(buf("a: 1\n", "a: 2\n"), "a: 2\n")).toBe("reload");
+  });
+  it("asks when unsaved edits differ from the new disk version", () => {
+    expect(diskChange(buf("a: 1\n", "a: 3\n"), "a: 2\n")).toBe("conflict");
+  });
+  it("handles deleted and newly created files", () => {
+    expect(diskChange(buf("a: 1\n"), null)).toBe("gone");
+    expect(diskChange(buf("a: 1\n", "a: 2\n"), null)).toBe("goneDirty");
+    expect(diskChange(buf("", "", false), null)).toBe("same");
+    expect(diskChange(buf("", "a: 1\n", false), "b: 1\n")).toBe("conflict");
+    expect(diskChange(buf("", "", false), "b: 1\n")).toBe("reload");
   });
 });

@@ -16,10 +16,10 @@
   import { t, tn } from "./lib/i18n.svelte";
   import { actionFor, comboOf, formatCombo, type ActionId } from "./lib/hotkeys";
   import {
-    readText, writeText, initialPaths, baseName, pathKind, listFiles, joinPath, type Side,
+    readText, writeText, initialPaths, baseName, pathKind, listFiles, fileStamps, joinPath, type Side,
   } from "./lib/files";
   import {
-    decodeText, encodeText, isDirty, minimalEdit, otherSide, statusOf, storeEditorText, type Buf, type Entry, type Marker, type Op,
+    decodeText, diskChange, encodeText, isDirty, minimalEdit, otherSide, statusOf, storeEditorText, type Buf, type Entry, type Marker, type Op,
   } from "./lib/workspace";
   import {
     alignOrder, applyEdits, compareTexts, formatText, isJsonText, KIND_LABELS, formatPath, pathOn, locatePath, planApply, planRevert, planSemanticEdit, renderNormalized, shortPath,
@@ -182,8 +182,10 @@
   }
 
   async function loadFile(side: Side, path: string) {
+    // Stamp first: a change made while reading is then still noticed later.
+    const [stamp] = await fileStamps([path]);
     const { text, eol, bom } = decodeText(await readText(path));
-    const buf: Buf = { path, saved: text, text, exists: true, eol, bom };
+    const buf: Buf = { path, saved: text, text, exists: true, eol, bom, stamp };
     const e = entries.length === 1 && entries[0].rel === "" ? entries[0] : { rel: "", status: "equal" as const };
     e[side] = buf;
     e.status = statusOf(e, undefined, opts);
@@ -192,6 +194,7 @@
 
   async function loadDir(side: Side, root: string) {
     const rels = await listFiles(root);
+    const stamps = await fileStamps(rels.map((rel) => joinPath(root, rel)));
     const texts = await Promise.all(rels.map((rel) => readText(joinPath(root, rel)).catch(() => null)));
     const byRel = new Map<string, Entry>();
     for (const e of entries) {
@@ -203,7 +206,7 @@
       if (texts[i] === null) return;
       const { text, eol, bom } = decodeText(texts[i]!);
       const e = byRel.get(rel) ?? { rel, status: "equal" };
-      e[side] = { path: joinPath(root, rel), saved: text, text, exists: true, eol, bom };
+      e[side] = { path: joinPath(root, rel), saved: text, text, exists: true, eol, bom, stamp: stamps[i] };
       byRel.set(rel, e);
     });
     entries = [...byRel.values()]
@@ -243,6 +246,7 @@
       await writeText(buf.path, encodeText(buf));
       buf.saved = buf.text;
       buf.exists = true;
+      [buf.stamp] = await fileStamps([buf.path]);
     } catch (e) {
       await message(String(e), { title: t("cannotSave"), kind: "error" });
     }
@@ -255,6 +259,129 @@
 
   async function saveAll() {
     for (const e of entries) for (const buf of [e.a, e.b]) if (isDirty(buf)) await saveBuf(buf!);
+  }
+
+  // ---- files changed outside YAD -------------------------------------------
+
+  let checking = false;
+  let notice = $state("");
+  let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+  function showNotice(text: string) {
+    notice = text;
+    clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => (notice = ""), 8000);
+  }
+
+  /** Folder mode: files that appeared on disk since the folders were opened. */
+  async function addNewFiles(): Promise<number> {
+    let added = 0;
+    for (const side of ["a", "b"] as const) {
+      const src = sources[side];
+      if (src?.kind !== "dir") continue;
+      const rels = await listFiles(src.path).catch(() => [] as string[]);
+      const fresh = rels.filter((rel) => !entries.find((e) => e.rel === rel)?.[side]);
+      if (!fresh.length) continue;
+      const paths = fresh.map((rel) => joinPath(src.path, rel));
+      const stamps = await fileStamps(paths);
+      const texts = await Promise.all(paths.map((p) => readText(p).catch(() => null)));
+      if (sources[side] !== src) continue;
+      fresh.forEach((rel, i) => {
+        if (texts[i] === null) return;
+        const { text, eol, bom } = decodeText(texts[i]!);
+        const buf: Buf = { path: paths[i], saved: text, text, exists: true, eol, bom, stamp: stamps[i] };
+        const e = entries.find((x) => x.rel === rel);
+        if (e?.[side]) return;
+        if (e) e[side] = buf;
+        else entries.push({ rel, [side]: buf, status: "equal" });
+        added++;
+      });
+    }
+    if (added) {
+      entries.sort((x, y) => (x.rel < y.rel ? -1 : 1));
+      for (const e of entries) e.status = statusOf(e, undefined, opts);
+    }
+    return added;
+  }
+
+  /**
+   * Pick up files changed, deleted or (with `rescan`, in folders) added
+   * outside YAD. Clean files are reloaded quietly; unsaved edits are never
+   * dropped without asking.
+   */
+  async function checkDisk(rescan: boolean) {
+    if (checking || !entries.length) return;
+    checking = true;
+    try {
+      flushSemantic();
+      const keepRel = entries[current]?.rel;
+      const reloaded: string[] = [], deleted: string[] = [];
+      let structural = rescan && dirMode && (await addNewFiles()) > 0;
+      const added = structural;
+      let touchedCurrent = false;
+
+      const items = entries.flatMap((e) => (["a", "b"] as const).flatMap((side) => (e[side] ? [{ e, side, buf: e[side]! }] : [])));
+      const stamps = await fileStamps(items.map((x) => x.buf.path));
+      for (const [i, { e, side, buf }] of items.entries()) {
+        const stamp = stamps[i];
+        if (stamp === (buf.stamp ?? null)) continue;
+        const text = stamp === null ? null : await readText(buf.path).catch(() => null);
+        const still = () => entries.includes(e) && e[side] === buf;
+        if (!still()) continue;
+        const disk = text === null ? null : decodeText(text);
+        const name = e.rel || baseName(buf.path);
+        let what = diskChange(buf, disk?.text ?? null);
+        if (what === "conflict") {
+          const reload = await ask(t("diskConflict", { name }), {
+            title: t("changedOnDisk"), kind: "warning", okLabel: t("reloadFromDisk"), cancelLabel: t("keepMine"),
+          });
+          if (!still()) continue;
+          if (!reload) {
+            // Keep the edits; Save will overwrite the new disk version.
+            Object.assign(buf, { saved: disk!.text, exists: true, stamp });
+            continue;
+          }
+          what = "reload";
+        }
+        buf.stamp = stamp;
+        if (what === "same") continue;
+        const isCurrent = e === entries[current];
+        const forget = () => (ops = ops.filter((o) => !(o.rel === e.rel && o.side === side)));
+        if (what === "reload") {
+          Object.assign(buf, { text: disk!.text, saved: disk!.text, eol: disk!.eol, bom: disk!.bom, exists: true });
+          forget();
+          if (isCurrent) {
+            raw.setDocSoft(side, disk!.text, true);
+            touchedCurrent = true;
+          }
+          reloaded.push(name);
+        } else if (what === "gone" && dirMode) {
+          delete e[side];
+          forget();
+          if (!e.a && !e.b) entries.splice(entries.indexOf(e), 1);
+          structural = true;
+          deleted.push(name);
+        } else {
+          // Deleted with unsaved edits, or the only file in two-file mode: keep the text, Save recreates it.
+          Object.assign(buf, { exists: false, saved: what === "gone" ? "" : buf.saved });
+          deleted.push(name);
+        }
+        e.status = statusOf(e, undefined, opts);
+      }
+
+      if (structural) {
+        const i = entries.findIndex((e) => e.rel === keepRel);
+        selectEntry(i >= 0 ? i : Math.max(0, Math.min(current, entries.length - 1)));
+      } else if (touchedCurrent) recompute();
+
+      const parts: string[] = [];
+      const list = (names: string[]) => names.slice(0, 3).join(", ") + (names.length > 3 ? ` +${names.length - 3}` : "");
+      if (reloaded.length) parts.push(t("reloadedFromDisk", { names: list(reloaded) }));
+      if (deleted.length) parts.push(t("deletedOnDisk", { names: list(deleted) }));
+      if (added) parts.push(t("newFilesOnDisk"));
+      if (parts.length) showNotice(parts.join(" · "));
+    } finally {
+      checking = false;
+    }
   }
 
   // ---- applying semantic changes -------------------------------------------
@@ -640,6 +767,10 @@
       }),
     );
 
+    // Files edited elsewhere (an editor, git pull…): check on return to the window and every 2 s while focused.
+    unlisten.push(win.onFocusChanged(({ payload }) => void (payload && checkDisk(true))));
+    const poll = setInterval(() => document.hasFocus() && checkDisk(false), 2000);
+
     initialPaths().then(async ([a, b]) => {
       if (a) await openPath("a", a);
       if (b) await openPath("b", b);
@@ -647,6 +778,7 @@
 
     return () => {
       clearTimeout(timer);
+      clearInterval(poll);
       unlisten.forEach((u) => u.then((f) => f()));
     };
   });
@@ -752,6 +884,7 @@
       {/if}
     {/if}
     <span class="spacer"></span>
+    {#if notice}<span class="notice" title={notice}>{notice}</span>{/if}
     {#if dirMode}
       <button onclick={saveAll} disabled={!anyDirty()} title={t("saveAllTitle") + hk("saveAll")}>{t("saveAll")}</button>
     {/if}
@@ -784,6 +917,7 @@
   footer { display: flex; align-items: center; gap: 8px; padding: 4px 10px; background: var(--panel); border-top: 1px solid var(--border); font-size: 12px; white-space: nowrap; }
   .hint { color: var(--muted); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .error { color: var(--removed); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .notice { color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; max-width: 40%; }
   .spacer { flex: 1; }
   label { display: flex; align-items: center; gap: 4px; }
   .segmented { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; flex: none; }
