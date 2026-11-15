@@ -161,6 +161,7 @@ file, and explicit flags win over it.
 | ⌘1 / ⌘2 | Semantic view (normalized, editable) / Source view (files as on disk) |
 | ⌘J | Show the place under the cursor in Source |
 | ⌘B | Toggle side panel |
+| ⇧⌘F | Filter files (folder mode), press again — filter changes |
 | ⌘, | Settings |
 | ⌥↓ / ⌥↑ | Next / previous difference |
 | ⌘F | Search |

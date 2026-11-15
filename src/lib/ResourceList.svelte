@@ -2,6 +2,7 @@
   import { settings } from "./prefs.svelte";
   import { decodeSecretValue, isSecret, formatPath, shortPath, type ApplyItem, type Change, type CompareResult, type Direction, type ResourceDiff, type ResourceStatus } from "./semantic";
   import { t } from "./i18n.svelte";
+  import { matcher } from "./filter";
 
   interface Props {
     result: CompareResult | null;
@@ -23,7 +24,32 @@
     for (const r of result?.resources ?? []) c[r.status]++;
     return c;
   });
-  const shown = $derived((result?.resources ?? []).filter((r) => !hideEqual || r.status !== "equal"));
+  let query = $state("");
+  let filterInput: HTMLInputElement;
+  const match = $derived(matcher(query));
+  export function focusFilter() {
+    filterInput?.focus();
+    filterInput?.select();
+  }
+
+  /**
+   * Resources (and their changes) to list. With a filter, a resource whose
+   * name matches keeps all its changes; otherwise only matching changes stay.
+   */
+  const shown = $derived.by(() => {
+    const out: Array<{ r: ResourceDiff; changes: number[] }> = [];
+    for (const r of result?.resources ?? []) {
+      if (hideEqual && r.status === "equal") continue;
+      const all = r.changes.map((_, i) => i);
+      if (!match || match(r.label)) {
+        out.push({ r, changes: all });
+        continue;
+      }
+      const hits = all.filter((i) => match(`${r.label} ${formatPath(r.changes[i].path)} ${changeText(r, r.changes[i])}`));
+      if (hits.length) out.push({ r, changes: hits });
+    }
+    return out;
+  });
   const errors = $derived(
     result ? [...result.errors.a.map((e) => ({ side: "Left", ...e })), ...result.errors.b.map((e) => ({ side: "Right", ...e }))] : [],
   );
@@ -60,8 +86,13 @@
     <div class="error">{e.side}, line {e.line}: {e.message}</div>
   {/each}
 
+  <div class="filter">
+    <input type="search" bind:this={filterInput} bind:value={query} placeholder={t("filterChanges")} spellcheck="false"
+      onkeydown={(e) => e.key === "Escape" && (query = "")} />
+  </div>
+
   <div class="items">
-    {#each shown as r (r.key)}
+    {#each shown as { r, changes } (r.key)}
       <div class="res-row" class:active={active === r.key}>
       <button
         class="res s-{r.status}"
@@ -73,7 +104,7 @@
       >
         <span class="icon">{icon[r.status]}</span>
         <span class="label" title={r.label}>{r.label}</span>
-        {#if r.changes.length}<span class="count">{r.changes.length}</span>{/if}
+        {#if r.changes.length}<span class="count">{changes.length < r.changes.length ? `${changes.length}/` : ""}{r.changes.length}</span>{/if}
       </button>
       {#if r.status !== "equal"}
         <span class="arrows res-arrows">
@@ -82,8 +113,8 @@
         </span>
       {/if}
       </div>
-      {#if r.changes.length && !collapsed[r.key]}
-        {#each r.changes as c, i}
+      {#if r.changes.length && (!collapsed[r.key] || match)}
+        {#each changes.map((i) => [r.changes[i], i] as const) as [c, i]}
           <div class="change s-{c.kind}" class:active={active === changeId(r, i)}>
             <button
               class="change-main"
@@ -102,7 +133,7 @@
         {/each}
       {/if}
     {:else}
-      <div class="empty">{result ? (result.resources.length ? t("noDifferences") : t("nothingToCompare")) : t("openTwo")}</div>
+      <div class="empty">{match ? t("nothingFound") : result ? (result.resources.length ? t("noDifferences") : t("nothingToCompare")) : t("openTwo")}</div>
     {/each}
   </div>
 </div>
@@ -112,6 +143,8 @@
   .summary { display: flex; gap: 10px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
   .summary label { margin-left: auto; display: flex; gap: 4px; align-items: center; color: var(--muted); }
   .items { overflow-y: auto; flex: 1; padding-bottom: 8px; }
+  .filter { display: flex; padding: 4px 10px; border-bottom: 1px solid var(--border); }
+  .filter input { flex: 1; min-width: 0; font-size: 12px; padding: 2px 6px; }
   .error { padding: 4px 10px; color: var(--removed); border-bottom: 1px solid var(--border); white-space: pre-wrap; }
   .empty { padding: 16px 10px; color: var(--muted); text-align: center; }
   button { all: unset; box-sizing: border-box; cursor: default; }

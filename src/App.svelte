@@ -40,6 +40,7 @@
   let sem: DiffView;
   let work: HTMLElement;
   let fileList: FileList | undefined = $state();
+  let resourceList: ResourceList | undefined = $state();
 
   // ---- side panel layout (sizes and collapsed sections are remembered) -----
   type PaneId = "files" | "changes" | "history";
@@ -926,6 +927,17 @@
         }
         break;
       case "toggleSidebar": sidebar = !sidebar; break;
+      case "filter": {
+        // Files first (folder mode), then the list of changes on the second press.
+        sidebar = true;
+        const files = dirMode && !layout.collapsed.files && !fileList?.filterFocused();
+        if (files) fileList?.focusFilter();
+        else {
+          layout.collapsed.changes = false;
+          tick().then(() => resourceList?.focusFilter());
+        }
+        break;
+      }
       case "prevDiff": active().jump(-1); break;
       case "nextDiff": active().jump(1); break;
       case "prevFile": if (dirMode) fileList?.move(-1); break;
@@ -937,6 +949,7 @@
   function onkey(e: KeyboardEvent) {
     const mod = e.metaKey || e.ctrlKey;
     if (settingsOpen || !mod || e.code !== "KeyZ" || e.defaultPrevented) return;
+    if ((e.target as HTMLElement | null)?.tagName === "INPUT") return; // undo inside a filter field
     const side = lastSide;
     if (!side) return;
     flushSemantic();
@@ -1030,7 +1043,7 @@
         {/if}
         <Section title={t("changes")} badge={result ? result.resources.reduce((n, r) => n + (r.status === "equal" ? 0 : r.changes.length || 1), 0) : ""}
           collapsed={c.changes} ontoggle={() => toggle("changes")} style={paneStyle("changes", 0)}>
-          <ResourceList {result} {onresource} onchange={onchangeClick} {onedit} onapply={apply} />
+          <ResourceList bind:this={resourceList} {result} {onresource} onchange={onchangeClick} {onedit} onapply={apply} />
         </Section>
         {#if showHistory}
           {#if !c.history && !c.changes}
