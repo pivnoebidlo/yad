@@ -39,7 +39,7 @@ jobs:
       - name: Build and smoke-test the CLI
         run: |
           npm run build:cli
-          node dist-cli/yad-cli.mjs --version
+          cp dist-cli/yad-cli.mjs "$RUNNER_TEMP/any-name.mjs" && node "$RUNNER_TEMP/any-name.mjs" --version
           node dist-cli/yad-cli.mjs diff src/lib/semantic/fixtures/manifest.yaml src/lib/semantic/fixtures/manifest.yaml
 
       - name: Test Rust backend

@@ -9,7 +9,7 @@ export default defineConfig({
   define: { __YAD_VERSION__: JSON.stringify(version) },
   ssr: { noExternal: true },
   build: {
-    ssr: "src/cli/yad.ts",
+    ssr: "src/cli/bin.ts",
     target: "node18",
     outDir: "dist-cli",
     emptyOutDir: true,
