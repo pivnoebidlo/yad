@@ -17,6 +17,7 @@ export interface Settings {
   ignorePaths: string[];
   emptyEqualsMissing: boolean;
   crossNamespace: boolean;
+  decodeSecrets: boolean;
   /** Formatting ("Format" button). */
   formatIndent: number;
   formatIndentSeq: boolean;
@@ -36,6 +37,7 @@ export const defaultSettings = (): Settings => ({
   ignorePaths: defaultIgnorePaths(),
   emptyEqualsMissing: true,
   crossNamespace: true,
+  decodeSecrets: true,
   formatIndent: 2,
   formatIndentSeq: true,
   formatSortK8s: true,
@@ -91,6 +93,7 @@ export function compareOptions(): CompareOptions {
     fallbackMergeKeys: ["name"],
     emptyEqualsMissing: settings.emptyEqualsMissing,
     crossNamespace: settings.crossNamespace,
+    decodeSecrets: settings.decodeSecrets,
   };
 }
 

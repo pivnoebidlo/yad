@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { formatPath, shortPath, type ApplyItem, type Change, type CompareResult, type Direction, type ResourceDiff, type ResourceStatus } from "./semantic";
+  import { settings } from "./prefs.svelte";
+  import { decodeSecretValue, isSecret, formatPath, shortPath, type ApplyItem, type Change, type CompareResult, type Direction, type ResourceDiff, type ResourceStatus } from "./semantic";
   import { t } from "./i18n.svelte";
 
   interface Props {
@@ -32,7 +33,9 @@
     return s.length > 60 ? s.slice(0, 57) + "…" : s;
   }
 
-  function changeText(c: Change): string {
+  function changeText(r: ResourceDiff, c0: Change): string {
+    const secret = settings.decodeSecrets && isSecret(r.a ?? r.b);
+    const c = secret ? { ...c0, a: decodeSecretValue(c0.path, c0.a), b: decodeSecretValue(c0.path, c0.b) } : c0;
     if (c.kind === "moved") {
       const to = c.path[c.path.length - 1] as number;
       return `${t("movedText", { from: (c.fromIndex ?? 0) + 1, to: to + 1 })} · ${short(c.b)}`;
@@ -84,11 +87,11 @@
           <div class="change s-{c.kind}" class:active={active === changeId(r, i)}>
             <button
               class="change-main"
-              title={`${formatPath(c.path)}\n${changeText(c)}`}
+              title={`${formatPath(c.path)}\n${changeText(r, c)}`}
               onclick={() => { active = changeId(r, i); onchange(r, c); }}
             >
               <span class="path">{shortPath(c.path)}</span>
-              <span class="value">{changeText(c)}</span>
+              <span class="value">{changeText(r, c)}</span>
             </button>
             <span class="arrows">
               <button title={t("applyLR")} onclick={() => onapply([{ resource: r, change: c }], "a-to-b")}>→</button>

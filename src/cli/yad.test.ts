@@ -133,3 +133,17 @@ describe("yad-cli merge", () => {
     expect(readFileSync(join(d2, "ours.yaml"), "utf8")).toMatch(/<<<<<<< ours\n {2}replicas: 3\n=======\n {2}replicas: 5\n>>>>>>> theirs/);
   });
 });
+
+describe("yad-cli and Secrets", () => {
+  const sec = (pw: string) => `apiVersion: v1\nkind: Secret\nmetadata:\n  name: db\ndata:\n  password: ${btoa(pw)}\n`;
+  it("hides Secret values unless --show-secrets", () => {
+    const d = tree({ "l.yaml": sec("old-pass"), "r.yaml": sec("new-pass") });
+    const hidden = run("diff", join(d, "l.yaml"), join(d, "r.yaml"));
+    expect(hidden.out).toContain("data.password: (hidden) → (hidden)");
+    expect(hidden.out).not.toContain(btoa("old-pass"));
+    expect(run("diff", "--output", "json", join(d, "l.yaml"), join(d, "r.yaml")).out).not.toContain(btoa("new-pass"));
+    expect(run("diff", "--show-secrets", join(d, "l.yaml"), join(d, "r.yaml")).out).toContain("data.password: old-pass → new-pass");
+    const git = run("git-diff", "s.yaml", join(d, "l.yaml"), "a", "100644", join(d, "r.yaml"), "b", "100644");
+    expect(git.out).toContain("(hidden)");
+  });
+});

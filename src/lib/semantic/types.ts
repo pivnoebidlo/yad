@@ -101,4 +101,6 @@ export interface CompareOptions {
   emptyEqualsMissing: boolean;
   /** Pair the same group/kind/name across namespaces when unambiguous (stage vs prod overlays). */
   crossNamespace: boolean;
+  /** Show Secret `data` values decoded from base64 in the normalized view. */
+  decodeSecrets: boolean;
 }

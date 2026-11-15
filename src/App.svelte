@@ -784,7 +784,8 @@
     semTimer = undefined;
     semSide = null;
     if (!normalized || !entries[current]) return;
-    const plan = planSemanticEdit(normalized[side], sem.getDoc(side), raw.getDoc(side), opts);
+    // Secret values are shown decoded: encode both texts back before comparing with the file.
+    const plan = planSemanticEdit(normalized.encode(side, normalized[side]), normalized.encode(side, sem.getDoc(side)), raw.getDoc(side), opts);
     if (plan.parseError) {
       semError = t("semParseError", { side: side === "a" ? t("sideLeft") : t("sideRight"), line: plan.parseError.line, message: plan.parseError.message.split("\n")[0] });
       semSide = side; // keep this side's text until it parses
