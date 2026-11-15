@@ -26,6 +26,24 @@ fn path_kind(path: String) -> &'static str {
     }
 }
 
+/// A cheap "has it changed" fingerprint per path (modification time and
+/// size), or `None` for a path that does not exist / is not a file.
+#[tauri::command]
+fn file_stamps(paths: Vec<String>) -> Vec<Option<String>> {
+    paths
+        .iter()
+        .map(|p| {
+            let m = std::fs::metadata(p).ok().filter(|m| m.is_file())?;
+            let t = m
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_nanos());
+            Some(format!("{t}:{}", m.len()))
+        })
+        .collect()
+}
+
 const MAX_FILES: usize = 5000;
 
 fn is_manifest(p: &Path) -> bool {
@@ -91,7 +109,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![read_text, write_text, path_kind, list_files, initial_paths])
+        .invoke_handler(tauri::generate_handler![read_text, write_text, path_kind, list_files, file_stamps, initial_paths])
         .run(tauri::generate_context!())
         .expect("error while running yad");
 }

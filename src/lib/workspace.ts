@@ -13,6 +13,8 @@ export interface Buf {
   exists: boolean;
   eol: "\n" | "\r\n";
   bom: boolean;
+  /** Disk fingerprint when the file was last read or written (see fileStamps). */
+  stamp?: string | null;
 }
 
 /** Split a file's content into "\n"-text plus its line ending and BOM. */
@@ -98,4 +100,22 @@ export function storeEditorText(e: Entry, side: Side, text: string, dirRoot: str
   if (text === "" || dirRoot === null) return;
   const other = e[otherSide(side)];
   e[side] = { path: joinPath(dirRoot, e.rel), saved: "", text, exists: false, eol: other?.eol ?? "\n", bom: other?.bom ?? false };
+}
+
+/**
+ * What to do when a file changed on disk (`disk` is its new text, null if it
+ * is gone):
+ *  same      — nothing to do (only touched, or still missing);
+ *  reload    — take the disk version (no unsaved edits, or they are identical);
+ *  conflict  — unsaved edits differ from the new disk version: ask;
+ *  gone      — deleted, no unsaved edits;
+ *  goneDirty — deleted while there are unsaved edits (keep them, Save recreates the file).
+ */
+export type DiskChange = "same" | "reload" | "conflict" | "gone" | "goneDirty";
+
+export function diskChange(buf: Buf, disk: string | null): DiskChange {
+  if (disk === null) return !buf.exists ? "same" : isDirty(buf) ? "goneDirty" : "gone";
+  if (buf.exists && disk === buf.saved) return "same";
+  if (!isDirty(buf) || buf.text === disk) return "reload";
+  return "conflict";
 }

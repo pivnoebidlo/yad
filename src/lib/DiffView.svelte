@@ -223,13 +223,17 @@
   /**
    * Bring a side to `text` with the smallest edit, outside the undo history:
    * the cursor stays where it was (used to refresh the semantic view while
-   * the user works in it).
+   * the user works in it). `resetHistory`: the text was replaced from outside
+   * (reloaded from disk), so earlier edits can no longer be undone.
    */
-  export function setDocSoft(side: Side, text: string) {
+  export function setDocSoft(side: Side, text: string, resetHistory = false) {
     const v = view(side);
     const cur = v.state.doc.toString();
-    if (cur === text) return;
-    v.dispatch({ changes: minimalEdit(cur, text), annotations: Transaction.addToHistory.of(false) });
+    if (cur !== text) v.dispatch({ changes: minimalEdit(cur, text), annotations: Transaction.addToHistory.of(false) });
+    if (resetHistory) {
+      v.dispatch({ effects: comp[side].history.reconfigure([]) });
+      v.dispatch({ effects: comp[side].history.reconfigure(history()) });
+    }
   }
 
   export function cursor(side: Side): number {

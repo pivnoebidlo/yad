@@ -159,6 +159,13 @@ const en = {
   bulkSkipped: "Skipped:",
   sideLeftName: "left",
   sideRightName: "right",
+  changedOnDisk: "Changed on disk",
+  diskConflict: "{name} was changed outside YAD, and you have unsaved edits in it.",
+  reloadFromDisk: "Load from disk",
+  keepMine: "Keep my edits",
+  reloadedFromDisk: "Reloaded from disk: {names}",
+  deletedOnDisk: "Deleted on disk: {names}",
+  newFilesOnDisk: "new files found",
   formatHint: "Format keeps comments, quotes and block scalars, removes extra spaces and repeated blank lines, and never reorders lists. The result is checked: if anything but formatting would change, the file is left alone.",
 };
 
@@ -314,6 +321,13 @@ const ru: Dict = {
   bulkSkipped: "Пропущены:",
   sideLeftName: "слева",
   sideRightName: "справа",
+  changedOnDisk: "Файл изменён на диске",
+  diskConflict: "{name} изменили вне YAD, а в нём есть твои несохранённые правки.",
+  reloadFromDisk: "Загрузить с диска",
+  keepMine: "Оставить мои правки",
+  reloadedFromDisk: "Перечитано с диска: {names}",
+  deletedOnDisk: "Удалено на диске: {names}",
+  newFilesOnDisk: "появились новые файлы",
   formatHint: "Формат сохраняет комментарии, кавычки и блочные скаляры, убирает лишние пробелы и повторные пустые строки и никогда не меняет порядок списков. Результат проверяется: если изменится что-то кроме оформления, файл не трогается.",
 };
 

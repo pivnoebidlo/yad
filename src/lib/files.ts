@@ -19,6 +19,8 @@ export function langFor(path: string | null): Lang {
 export const baseName = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
 export const pathKind = (path: string) => invoke<"file" | "dir" | "missing">("path_kind", { path });
+/** Modification fingerprint per path; null when the file is gone. */
+export const fileStamps = (paths: string[]) => invoke<Array<string | null>>("file_stamps", { paths });
 export const listFiles = (root: string) => invoke<string[]>("list_files", { root });
 
 /** Join a root directory and a `/`-separated relative path. */
