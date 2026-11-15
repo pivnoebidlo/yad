@@ -356,12 +356,3 @@ export function main(argv: string[], io: Io): number {
   }
 }
 
-// Run when executed (not when imported by tests).
-if (typeof process !== "undefined" && process.argv[1] && /yad(-cli)?(\.m?js)?$/.test(process.argv[1])) {
-  const color = !!process.stdout.isTTY && !process.env.NO_COLOR;
-  process.exitCode = main(process.argv.slice(2), {
-    out: (s) => process.stdout.write(s + "\n"),
-    err: (s) => process.stderr.write(s + "\n"),
-    color,
-  });
-}
