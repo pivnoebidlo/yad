@@ -10,6 +10,7 @@
  *   defaultIgnore: true      # false: also compare status, managedFields, uid…
  *   emptyEqualsMissing: true
  *   crossNamespace: true
+ *   pairRenamed: true
  *   decodeSecrets: true
  *   format:
  *     indent: 2              # 2 or 4
@@ -26,11 +27,12 @@ export interface ProjectConfig {
   defaultIgnore?: boolean;
   emptyEqualsMissing?: boolean;
   crossNamespace?: boolean;
+  pairRenamed?: boolean;
   decodeSecrets?: boolean;
   format?: Partial<FormatOptions>;
 }
 
-const BOOLS = ["defaultIgnore", "emptyEqualsMissing", "crossNamespace", "decodeSecrets"] as const;
+const BOOLS = ["defaultIgnore", "emptyEqualsMissing", "crossNamespace", "pairRenamed", "decodeSecrets"] as const;
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 
 /** Parse `.yad.yaml`; problems are reported, the valid parts still apply. */
@@ -88,6 +90,7 @@ export function applyProjectCompare(base: CompareOptions, c: ProjectConfig | nul
     ignore,
     emptyEqualsMissing: c.emptyEqualsMissing ?? base.emptyEqualsMissing,
     crossNamespace: c.crossNamespace ?? base.crossNamespace,
+    pairRenamed: c.pairRenamed ?? base.pairRenamed,
     decodeSecrets: c.decodeSecrets ?? base.decodeSecrets,
   };
 }

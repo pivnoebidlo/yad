@@ -262,3 +262,32 @@ describe("matching across namespaces", () => {
     expect(paired[0].changes.map((c) => formatPath(c.path))).toEqual(["spec.replicas"]);
   });
 });
+
+describe("lessons from real overlays", () => {
+  const summary2 = (a: string, b: string, o = {}) =>
+    compareTexts(a, b, o).resources.map((r) => `${r.label}: ${r.status === "changed" ? r.changes.map((c) => formatPath(c.path)).join(", ") : r.status}`);
+
+  it("compares files with a repeated key using the last one, with a warning", () => {
+    const a = "s3:\n  buckets: [a]\n  url: x\n  buckets: [b]\n";
+    const res = compareTexts(a, "s3:\n  buckets: [c]\n  url: x\n");
+    expect(res.errors.a).toEqual([]);
+    expect(res.warnings.a).toEqual([{ line: 4, message: 'duplicate key "buckets": the one at line 2 is ignored' }]);
+    expect(res.resources[0].changes.map((c) => [formatPath(c.path), c.a, c.b])).toEqual([["s3.buckets[0]", "b", "c"]]);
+  });
+
+  it("pairs a renamed resource when it is the only one of its kind and the names are related", () => {
+    const es = (n: string, mem: string) => `apiVersion: elasticsearch.k8s.elastic.co/v1\nkind: Elasticsearch\nmetadata:\n  name: ${n}\nspec:\n  memory: ${mem}\n`;
+    expect(summary2(es("elk-stage", "4Gi"), es("elk-prod", "6Gi"))).toEqual(["Elasticsearch elk-stage → elk-prod: metadata.name, spec.memory"]);
+    expect(summary2(es("elk-stage", "4Gi"), es("elk-prod", "6Gi"), { pairRenamed: false })).toEqual([
+      "Elasticsearch elk-prod: added", "Elasticsearch elk-stage: removed",
+    ]);
+    // Unrelated names are a removal plus an addition, not a rename.
+    expect(summary2(es("search", "4Gi"), es("logs", "4Gi"))).toEqual(["Elasticsearch logs: added", "Elasticsearch search: removed"]);
+  });
+
+  it("matches list items by id when names repeat", () => {
+    const l = (items: string[]) =>
+      `apiVersion: v1\nkind: ConfigMap\nmetadata: {name: c}\nvalues:\n  types:\n${items.map((i) => `    - {id: "${i}", name: same}`).join("\n")}\n`;
+    expect(summary2(l(["01", "02", "03"]), l(["01", "03"]))).toEqual(["ConfigMap c: values.types[02]"]);
+  });
+});

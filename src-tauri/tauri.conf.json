@@ -40,7 +40,7 @@
       "minimumSystemVersion": "11.0"
     },
     "shortDescription": "YAML Ain't Different: semantic YAML/JSON diff for Kubernetes manifests",
-    "createUpdaterArtifacts": true
+    "createUpdaterArtifacts": false
   },
   "plugins": {
     "updater": {

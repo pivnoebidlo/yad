@@ -34,9 +34,10 @@ export const DEFAULT_MERGE_KEYS: Record<string, string[]> = {
 export const defaultOptions = (): CompareOptions => ({
   ignore: DEFAULT_IGNORE.map((p) => [...p]),
   mergeKeys: { ...DEFAULT_MERGE_KEYS },
-  fallbackMergeKeys: ["name"],
+  fallbackMergeKeys: ["name", "id"],
   emptyEqualsMissing: true,
   crossNamespace: true,
+  pairRenamed: true,
   decodeSecrets: true,
 });
 

@@ -141,6 +141,7 @@ ignore:                  # paths ignored in addition to the usual ones
 defaultIgnore: true      # false: also compare status, managedFields, uid…
 emptyEqualsMissing: true # {} and [] are the same as a missing key
 crossNamespace: true     # pair stage/api with prod/api
+pairRenamed: true        # pair Kafka kedo-grk with Kafka kedo-eurochem
 decodeSecrets: true
 format:
   indent: 2              # 2 or 4
