@@ -1129,7 +1129,14 @@
   .view { flex: 1; min-width: 0; display: flex; }
   .view.hidden { display: none; }
   header { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--border); border-bottom: 1px solid var(--border); }
-  .pane { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--panel); min-width: 0; transition: background 0.1s; }
+  .pane { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 6px 10px; background: var(--panel); min-width: 0; transition: background 0.1s;
+    container-type: inline-size; }
+  .pane > :global(*) { flex: none; }
+  .pane > .path { flex: 1 1 120px; }
+  /* Narrow pane: the file name gets its own line above the buttons instead of being squeezed to nothing. */
+  @container (max-width: 560px) {
+    .pane > .path { order: -1; flex-basis: 100%; }
+  }
   .pane.drop { background: var(--accent-soft); outline: 2px dashed var(--accent); outline-offset: -3px; }
   .open { display: flex; gap: 4px; }
   .badge { flex: none; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px;
