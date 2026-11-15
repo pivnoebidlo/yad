@@ -1,6 +1,7 @@
 <script lang="ts">
   import { isDirty, type Entry, type FileStatus } from "./workspace";
   import { t } from "./i18n.svelte";
+  import { matcher } from "./filter";
 
   interface Props {
     entries: Entry[];
@@ -12,7 +13,16 @@
   let { entries, current, onselect, onbulk }: Props = $props();
 
   let hideEqual = $state(true);
+  let query = $state("");
   let list: HTMLDivElement;
+  let filterInput: HTMLInputElement;
+  const match = $derived(matcher(query));
+
+  export function focusFilter() {
+    filterInput?.focus();
+    filterInput?.select();
+  }
+  export const filterFocused = () => document.activeElement === filterInput;
 
   const hint = (s: FileStatus) =>
     ({ changed: t("filesDiffer"), reordered: t("orderOnly"), equal: t("identical"), added: t("onlyRight"), removed: t("onlyLeft"), error: t("noParse") })[s];
@@ -24,7 +34,7 @@
   const visible = $derived(
     entries
       .map((e, i) => ({ e, i }))
-      .filter(({ e, i }) => !hideEqual || i === current || (e.status !== "equal" && e.status !== "reordered")),
+      .filter(({ e, i }) => (match ? match(e.rel) : true) && (!hideEqual || (!match && i === current) || (e.status !== "equal" && e.status !== "reordered"))),
   );
 
   /** Select the next/previous visible file (arrow keys, Alt+Cmd+arrows). */
@@ -54,6 +64,11 @@
     {#if counts.error}<span title={t("noParse")}><i class="dot s-error"></i>{counts.error}</span>{/if}
     <label title={t("hideEqualFilesTitle")}><input type="checkbox" bind:checked={hideEqual} /> {t("hideEqual")}</label>
   </div>
+  <div class="filter">
+    <input type="search" bind:this={filterInput} bind:value={query} placeholder={t("filterFiles")} spellcheck="false"
+      onkeydown={(e) => { if (e.key === "Escape") { query = ""; list?.focus(); } else if (e.key === "ArrowDown" || e.key === "Enter") { e.preventDefault(); list?.focus(); if (visible.length && !visible.some((v) => v.i === current)) onselect(visible[0].i); } }} />
+    {#if match}<span class="found">{visible.length}</span>{/if}
+  </div>
   {#if onbulk}
     <div class="bulk">
       <span>{t("bulkFormat")}</span>
@@ -74,7 +89,7 @@
         {#if isDirty(e.a) || isDirty(e.b)}<span class="dirty" title={t("unsaved")}>✎</span>{/if}
       </button>
     {:else}
-      <div class="empty">{t("noDifferingFiles")}</div>
+      <div class="empty">{match ? t("nothingFound") : t("noDifferingFiles")}</div>
     {/each}
   </div>
 </div>
@@ -84,6 +99,9 @@
   .summary { display: flex; gap: 10px; align-items: center; padding: 4px 10px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
   .summary span { display: flex; align-items: center; gap: 4px; }
   .summary label { margin-left: auto; display: flex; gap: 4px; align-items: center; color: var(--muted); }
+  .filter { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-bottom: 1px solid var(--border); }
+  .filter input { flex: 1; min-width: 0; font-size: 12px; padding: 2px 6px; }
+  .found { color: var(--muted); font-variant-numeric: tabular-nums; }
   .bulk { display: flex; gap: 4px; align-items: center; padding: 3px 10px; border-bottom: 1px solid var(--border); color: var(--muted); white-space: nowrap; overflow: hidden; }
   .bulk .sep { margin-left: 8px; }
   .bulk button { padding: 0 6px; font-size: 11px; }
