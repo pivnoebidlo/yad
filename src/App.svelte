@@ -12,19 +12,20 @@
   import Section from "./lib/Section.svelte";
   import Splitter from "./lib/Splitter.svelte";
   import Settings from "./lib/Settings.svelte";
+  import ConflictList, { type Pick } from "./lib/ConflictList.svelte";
   import { settings, compareOptions, effectiveTheme, formatOptions } from "./lib/prefs.svelte";
   import { t, tn } from "./lib/i18n.svelte";
   import { actionFor, comboOf, formatCombo, type ActionId } from "./lib/hotkeys";
   import {
-    readText, writeText, initialPaths, baseName, pathKind, listFiles, fileStamps, joinPath, projectKind, render, type RenderTool, type Side,
+    readText, writeText, initialPaths, baseName, pathKind, listFiles, fileStamps, joinPath, projectKind, render, mergeArgs, exitApp, type RenderTool, type Side,
   } from "./lib/files";
   import {
     decodeText, diskChange, encodeText, isDirty, minimalEdit, otherSide, statusOf, storeEditorText, type Buf, type Entry, type Marker, type Op,
   } from "./lib/workspace";
   import {
-    alignOrder, applyEdits, compareTexts, formatText, isJsonText, KIND_LABELS, formatPath, pathOn, locatePath, planApply, planRevert, planSemanticEdit, renderNormalized, shortPath,
+    alignOrder, applyEdits, compareTexts, formatText, isJsonText, KIND_LABELS, formatPath, pathOn, locatePath, planApply, planRevert, planSemanticEdit, renderNormalized, shortPath, merge3, resolveConflict,
     type ApplyItem, type Change, type CompareResult, type Direction, type NormalizedView,
-    type ResourceDiff, type SourceRange, type Touched,
+    type ResourceDiff, type SourceRange, type Touched, type MergeConflict,
   } from "./lib/semantic";
 
   type Mode = "text" | "semantic";
@@ -159,6 +160,7 @@
   }
 
   async function openPath(side: Side, path: string) {
+    if (merge) return;
     const found = await pathKind(path);
     if (found === "missing") return message(t("notExist", { path }), { title: t("cannotOpen"), kind: "error" });
     let src: Source = { kind: found, path };
@@ -305,18 +307,21 @@
     schedule();
   }
 
-  async function saveBuf(buf: Buf) {
+  async function saveBuf(buf: Buf): Promise<boolean> {
     try {
       await writeText(buf.path, encodeText(buf));
       buf.saved = buf.text;
       buf.exists = true;
       [buf.stamp] = await fileStamps([buf.path]);
+      return true;
     } catch (e) {
       await message(String(e), { title: t("cannotSave"), kind: "error" });
+      return false;
     }
   }
 
   async function save(side: Side) {
+    if (merge && side === "b") return void (await saveMerge());
     const buf = entries[current]?.[side];
     if (isDirty(buf)) await saveBuf(buf!);
   }
@@ -454,6 +459,105 @@
     }
   }
 
+  // ---- three-way merge (git mergetool) ------------------------------------
+
+  type MergeShow = "theirs" | "ours" | "base";
+  type MergeSession = {
+    paths: Record<MergeShow, string>;
+    texts: Record<MergeShow, string>;
+    conflicts: MergeConflict[];
+    choice: Array<Pick | undefined>;
+    applied: number;
+    show: MergeShow;
+    /** The result was written to MERGED at least once. */
+    saved: boolean;
+  };
+  let merge = $state<MergeSession | null>(null);
+
+  /** `yad --merge BASE LOCAL REMOTE MERGED`: left shows a version, right the result. */
+  async function startMerge([base, local, remote, merged]: string[]) {
+    const read = async (p: string) => decodeText(await readText(p).catch(() => ""));
+    const [b, l, r, onDisk] = await Promise.all([base, local, remote, merged].map(read));
+    const [stamp] = await fileStamps([merged]);
+    const m = merge3(b.text, l.text, r.text, opts);
+    merge = {
+      paths: { base, ours: local, theirs: remote },
+      texts: { base: b.text, ours: l.text, theirs: r.text },
+      conflicts: m.conflicts,
+      choice: m.conflicts.map(() => undefined),
+      applied: m.applied,
+      show: "theirs",
+      saved: false,
+    };
+    sources = { a: { kind: "file", path: remote }, b: { kind: "file", path: merged } };
+    const e: Entry = {
+      rel: "",
+      status: "equal",
+      a: { path: remote, saved: r.text, text: r.text, exists: true, eol: r.eol, bom: r.bom, readonly: true },
+      // Starts dirty: the file on disk holds git's conflict markers until the result is saved.
+      b: { path: merged, saved: onDisk.text, text: m.text, exists: true, eol: l.eol, bom: l.bom, stamp },
+    };
+    e.status = statusOf(e, undefined, opts);
+    entries = [e];
+    selectEntry(0);
+    if (m.errors.length)
+      await message(`${m.errors.slice(0, 10).join("\n")}\n\n${t("mergeFailedBody")}`, { title: t("mergeFailed"), kind: "warning" });
+  }
+
+  /** Switch the reference version on the left. */
+  function showInMerge(which: MergeShow) {
+    const e = entries[0];
+    if (!merge || !e?.a || merge.show === which) return;
+    flushSemantic();
+    merge.show = which;
+    const path = merge.paths[which];
+    const text = merge.texts[which];
+    e.a = { ...e.a, path, saved: text, text };
+    sources.a = { kind: "file", path };
+    raw.setDocSoft("a", text, true);
+    recompute();
+  }
+
+  function pickConflict(i: number, side: Pick) {
+    if (!merge) return;
+    flushSemantic();
+    const c = merge.conflicts[i];
+    const r = resolveConflict(raw.getDoc("b"), merge.texts[side], c, opts);
+    if (r.errors.length) return void message(r.errors.join("\n"), { title: t("someNotApplied"), kind: "warning" });
+    const what = c.path ? shortPath(c.path) : c.label;
+    rewriteSide("b", r.text, `${side === "ours" ? t("pickOurs") : t("pickTheirs")}: ${what}`);
+    merge.choice[i] = side;
+  }
+
+  function onconflict(c: MergeConflict) {
+    const r = result?.resources.find((x) => x.key === c.key || x.a?.key === c.key || x.b?.key === c.key);
+    if (!r) return;
+    if (mode === "semantic" && normalized) {
+      sem.select({ a: point(normalized.locate("a", r.key, c.path)), b: point(normalized.locate("b", r.key, c.path)) }, "b");
+      return;
+    }
+    const at = (side: Side) => {
+      const res = r[side];
+      return res && point(c.path ? locatePath(res.node, c.path, res.ctx) : res.range);
+    };
+    raw.select({ a: at("a"), b: at("b") }, "b");
+  }
+
+  async function saveMerge(): Promise<boolean> {
+    if (!merge) return false;
+    flushSemantic();
+    const open = merge.choice.filter((c) => !c).length;
+    if (open && !(await ask(tn("mergeUnresolvedSave", open), { title: t("mergeTitle"), kind: "warning" }))) return false;
+    const buf = entries[0]?.b;
+    if (!buf || !(await saveBuf(buf))) return false;
+    merge.saved = true;
+    return true;
+  }
+
+  async function finishMerge() {
+    if (await saveMerge()) await exitApp(0);
+  }
+
   // ---- applying semantic changes -------------------------------------------
 
   const changeKey = (r: ResourceDiff, c?: Change) => `${r.key}|${c ? formatPath(c.path) : ""}`;
@@ -551,7 +655,8 @@
   /** Rendered output cannot be changed: say so instead. */
   async function refuseRendered(side: Side): Promise<boolean> {
     if (!entries[current]?.[side]?.readonly) return false;
-    await message(t("renderedReadOnly"), { title: t("renderRendered"), kind: "info" });
+    if (merge) await message(t("mergeReadOnly"), { title: t("mergeTitle"), kind: "info" });
+    else await message(t("renderedReadOnly"), { title: t("renderRendered"), kind: "info" });
     return true;
   }
 
@@ -839,6 +944,14 @@
     const win = getCurrentWindow();
     unlisten.push(
       win.onCloseRequested(async (ev) => {
+        if (merge) {
+          // git mergetool reads the exit code: 0 = merged, anything else = leave the file unmerged.
+          ev.preventDefault();
+          if (merge.saved && !anyDirty()) return exitApp(0);
+          const ok = await ask(merge.saved ? t("quitAnyway") : t("mergeQuitUnmerged"), { title: t("unsavedTitle"), kind: "warning" });
+          if (ok) await exitApp(merge.saved ? 0 : 1);
+          return;
+        }
         if (!anyDirty()) return;
         ev.preventDefault();
         const ok = await ask(t("quitAnyway"), { title: t("unsavedTitle"), kind: "warning" });
@@ -850,7 +963,9 @@
     unlisten.push(win.onFocusChanged(({ payload }) => void (payload && checkDisk(true))));
     const poll = setInterval(() => document.hasFocus() && checkDisk(false), 2000);
 
-    initialPaths().then(async ([a, b]) => {
+    mergeArgs().then(async (m) => {
+      if (m) return startMerge(m);
+      const [a, b] = await initialPaths();
       if (a) await openPath("a", a);
       if (b) await openPath("b", b);
     });
@@ -883,6 +998,11 @@
             <Splitter ondrag={(d) => (layout.files = clamp(layout.files + d, 60, window.innerHeight - 200))} />
           {/if}
         {/if}
+        {#if merge}
+          <Section title={t("conflicts")} badge={merge.conflicts.length} collapsed={false} ontoggle={() => {}} style="flex: none; max-height: 45%">
+            <ConflictList conflicts={merge.conflicts} choice={merge.choice} applied={merge.applied} onpick={pickConflict} onselect={onconflict} />
+          </Section>
+        {/if}
         <Section title={t("changes")} badge={result ? result.resources.reduce((n, r) => n + (r.status === "equal" ? 0 : r.changes.length || 1), 0) : ""}
           collapsed={c.changes} ontoggle={() => toggle("changes")} style={paneStyle("changes", 0)}>
           <ResourceList {result} {onresource} onchange={onchangeClick} {onedit} onapply={apply} />
@@ -905,10 +1025,20 @@
           {@const src = sources[side]}
           {@const buf = entry?.[side]}
           <div class="pane" class:drop={dropTarget === side}>
+            {#if merge && side === "a"}
+              <div class="segmented" role="tablist" title={t("mergeTitle")}>
+                {#each [["theirs", "mergeTheirs", "mergeTheirsTitle"], ["ours", "mergeOurs", "mergeOursTitle"], ["base", "mergeBase", "mergeBaseTitle"]] as const as [id, label, title]}
+                  <button class:on={merge.show === id} onclick={() => showInMerge(id)} title={t(title)}>{t(label)}</button>
+                {/each}
+              </div>
+            {:else if merge}
+              <span class="role" title={t("mergeResultTitle")}>{t("mergeResult")}</span>
+            {:else}
             <div class="open">
               <button onclick={() => pick(side, false)} title={side === "a" ? t("openFileLeft") + hk("openFileLeft") : t("openFileRight") + hk("openFileRight")}>{t("openFile")}</button>
               <button onclick={() => pick(side, true)} title={side === "a" ? t("openFolderLeft") + hk("openFolderLeft") : t("openFolderRight") + hk("openFolderRight")}>{t("openFolder")}</button>
             </div>
+            {/if}
             <span class="path" title={src?.kind === "render" ? `${renderLabel(src)}\n${src.path}` : buf?.path ?? src?.path ?? ""}>
               {#if !src}
                 <i>{t("dropHere")}</i>
@@ -964,6 +1094,8 @@
     {#if mode === "semantic"}
       {#if semError}
         <span class="error" title={semError}>{semError}</span>
+      {:else if merge}
+        <span class="hint">{t("mergeHint")}</span>
       {:else if entry?.a?.readonly || entry?.b?.readonly}
         <span class="hint">{t("renderedHint")}</span>
       {:else}
@@ -972,6 +1104,9 @@
     {/if}
     <span class="spacer"></span>
     {#if notice}<span class="notice" title={notice}>{notice}</span>{/if}
+    {#if merge}
+      <button class="finish" onclick={finishMerge} title={t("mergeFinishTitle")}>✓ {t("mergeFinish")}</button>
+    {/if}
     {#if dirMode}
       <button onclick={saveAll} disabled={!anyDirty()} title={t("saveAllTitle") + hk("saveAll")}>{t("saveAll")}</button>
     {/if}
@@ -1013,6 +1148,8 @@
   .segmented button + button { border-left: 1px solid var(--border); }
   .segmented button.on, .toggle.on { background: var(--accent); color: var(--accent-text); }
   .toggle { padding: 2px 8px; }
+  .role { flex: none; font-weight: 600; color: var(--accent); }
+  .finish { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
   .gear { padding: 0 6px; font-size: 14px; background: none; border: none; color: var(--muted); }
   .gear:hover { color: var(--text); }
 </style>

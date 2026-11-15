@@ -33,3 +33,8 @@ export function joinPath(root: string, rel: string): string {
   const sep = root.includes("\\") && !root.includes("/") ? "\\" : "/";
   return root.replace(/[\\/]+$/, "") + sep + rel.split("/").join(sep);
 }
+
+/** `yad --merge BASE LOCAL REMOTE MERGED` (git mergetool): the four paths, or null. */
+export const mergeArgs = () => invoke<string[] | null>("merge_args");
+/** Quit with an exit code (git mergetool: 0 = merged, 1 = not merged). */
+export const exitApp = (code: number) => invoke<void>("exit_app", { code });

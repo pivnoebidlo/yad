@@ -95,3 +95,41 @@ describe("yad-cli git-diff", () => {
     expect(added.out).toContain("only on the right");
   });
 });
+
+describe("yad-cli merge", () => {
+  const files = () => tree({ "base.yaml": dep(2, "  paused: false\n"), "ours.yaml": dep(3, "  paused: false\n"), "theirs.yaml": dep(2, "  paused: true\n"), "conflict.yaml": dep(5, "  paused: false\n") });
+
+  it("merges cleanly into stdout or a file", () => {
+    const d = files();
+    const r = run("merge", join(d, "base.yaml"), join(d, "ours.yaml"), join(d, "theirs.yaml"));
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("replicas: 3");
+    expect(r.out).toContain("paused: true");
+    expect(run("merge", "-o", join(d, "out.yaml"), join(d, "base.yaml"), join(d, "ours.yaml"), join(d, "theirs.yaml")).code).toBe(0);
+    expect(readFileSync(join(d, "out.yaml"), "utf8")).toBe(dep(3, "  paused: true\n"));
+  });
+
+  it("reports conflicts and writes nothing unless --prefer", () => {
+    const d = files();
+    const args = [join(d, "base.yaml"), join(d, "ours.yaml"), join(d, "conflict.yaml")];
+    const r = run("merge", "-o", join(d, "out.yaml"), ...args);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("conflict: Deployment shop/api spec.replicas: base 2, ours 3, theirs 5");
+    expect(() => readFileSync(join(d, "out.yaml"))).toThrow();
+    expect(run("merge", "--prefer", "theirs", ...args).out).toContain("replicas: 5");
+    expect(run("merge", "--prefer=ours", ...args).out).toContain("replicas: 3");
+  });
+
+  it("works as a git merge driver, falling back to conflict markers", () => {
+    const d = files();
+    const clean = run("merge-driver", join(d, "base.yaml"), join(d, "ours.yaml"), join(d, "theirs.yaml"), "k8s/api.yaml", "7");
+    expect(clean.code).toBe(0);
+    expect(readFileSync(join(d, "ours.yaml"), "utf8")).toBe(dep(3, "  paused: true\n"));
+
+    const d2 = files();
+    const bad = run("merge-driver", join(d2, "base.yaml"), join(d2, "ours.yaml"), join(d2, "conflict.yaml"), "k8s/api.yaml");
+    expect(bad.code).toBe(1);
+    expect(bad.err).toContain("yad: k8s/api.yaml: conflict:");
+    expect(readFileSync(join(d2, "ours.yaml"), "utf8")).toMatch(/<<<<<<< ours\n {2}replicas: 3\n=======\n {2}replicas: 5\n>>>>>>> theirs/);
+  });
+});
