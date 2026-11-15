@@ -42,6 +42,28 @@ git difftool -t yad -d main       # working tree vs a branch
 git difftool -t yad -d HEAD~3 HEAD
 ```
 
+**YAD as `git mergetool`** — three-way merge of conflicted YAML/JSON. Changes
+from both sides are combined by key (key order, list order and formatting
+never conflict); real conflicts are listed with base / ours / theirs values and
+resolved with one click. The left pane switches between theirs, ours and base;
+the right pane is the result. *Finish merge* saves it and tells git the file is
+merged; closing without saving leaves it unmerged.
+
+```sh
+git config --global mergetool.yad.cmd '/Applications/YAD.app/Contents/MacOS/yad --merge "$BASE" "$LOCAL" "$REMOTE" "$MERGED"'
+git config --global mergetool.yad.trustExitCode true
+git mergetool -t yad
+```
+
+**Semantic merges in `git merge` / `git rebase`** (needs `yad-cli`): files are
+merged by key automatically; only real conflicts get the usual markers (then
+`git mergetool -t yad`):
+
+```sh
+git config --global merge.yad.driver 'yad-cli merge-driver %O %A %B %P %L'
+printf '*.yaml merge=yad\n*.yml merge=yad\n' >> .gitattributes
+```
+
 **Semantic `git diff` in the terminal** (needs `yad-cli`, see below):
 
 ```sh
@@ -67,11 +89,13 @@ node yad-cli.mjs diff stage/ prod/                  # report; exit 1 if anything
 node yad-cli.mjs diff a.yaml b.yaml --output json   # or --output markdown (for PR comments)
 node yad-cli.mjs format k8s/                        # exit 1 if files need formatting
 node yad-cli.mjs format --write k8s/                # fix them
+node yad-cli.mjs merge base.yaml ours.yaml theirs.yaml -o out.yaml   # three-way merge
 node yad-cli.mjs --help
 ```
 
-Exit codes: `0` — no differences / already formatted, `1` — differences /
-needs formatting, `2` — error. Files that differ only in key order or
+Exit codes: `0` — no differences / already formatted / merged, `1` —
+differences / needs formatting / merge conflicts (nothing is written; or settle
+them with `--prefer ours|theirs`), `2` — error. Files that differ only in key order or
 formatting are not a difference (use `--order-matters` to change that).
 
 Example CI step (GitHub Actions) that fails when environments drift:

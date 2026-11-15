@@ -205,6 +205,16 @@ mod tests {
         assert_eq!(files, vec!["real.yaml", "sub/link.yaml"]);
         std::fs::remove_dir_all(&d).unwrap();
     }
+
+    #[test]
+    fn merge_args_need_four_paths() {
+        let v = |xs: &[&str]| xs.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let got = parse_merge_args(&v(&["--merge", "/b", "/l", "/r", "/m"])).unwrap();
+        assert_eq!(got.len(), 4);
+        assert!(got[3].ends_with("m"));
+        assert_eq!(parse_merge_args(&v(&["--merge", "/b", "/l"])), None);
+        assert_eq!(parse_merge_args(&v(&["/a", "/b"])), None);
+    }
 }
 
 /// Paths passed on the command line (`yad left.yaml right.yaml`),
@@ -212,17 +222,31 @@ mod tests {
 /// which also skips macOS `-psn_*` launch arguments.
 #[tauri::command]
 fn initial_paths() -> Vec<String> {
-    let cwd = std::env::current_dir().unwrap_or_default();
-    std::env::args()
-        .skip(1)
-        .filter(|a| !a.starts_with('-'))
-        .take(2)
-        .map(|a| {
-            let p = PathBuf::from(&a);
-            let abs = if p.is_absolute() { p } else { cwd.join(p) };
-            abs.canonicalize().unwrap_or(abs).to_string_lossy().into_owned()
-        })
-        .collect()
+    std::env::args().skip(1).filter(|a| !a.starts_with('-')).take(2).map(|a| absolute(&a)).collect()
+}
+
+fn absolute(a: &str) -> String {
+    let p = PathBuf::from(a);
+    let abs = if p.is_absolute() { p } else { std::env::current_dir().unwrap_or_default().join(p) };
+    abs.canonicalize().unwrap_or(abs).to_string_lossy().into_owned()
+}
+
+/// `yad --merge BASE LOCAL REMOTE MERGED` (git mergetool): the four paths, absolute.
+fn parse_merge_args(args: &[String]) -> Option<Vec<String>> {
+    let i = args.iter().position(|a| a == "--merge")?;
+    let rest: Vec<String> = args[i + 1..].iter().take(4).map(|a| absolute(a)).collect();
+    (rest.len() == 4).then_some(rest)
+}
+
+#[tauri::command]
+fn merge_args() -> Option<Vec<String>> {
+    parse_merge_args(&std::env::args().skip(1).collect::<Vec<_>>())
+}
+
+/// Quit with an exit code: git mergetool reads it (0 = merged, 1 = not).
+#[tauri::command]
+fn exit_app(app: tauri::AppHandle, code: i32) {
+    app.exit(code);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -230,7 +254,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![read_text, write_text, path_kind, list_files, file_stamps, project_kind, render, initial_paths])
+        .invoke_handler(tauri::generate_handler![read_text, write_text, path_kind, list_files, file_stamps, project_kind, render, initial_paths, merge_args, exit_app])
         .run(tauri::generate_context!())
         .expect("error while running yad");
 }

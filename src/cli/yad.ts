@@ -5,15 +5,18 @@
  *   yad-cli diff <left> <right>        semantic diff of two files or folders
  *   yad-cli format [--write] <path…>   check (default) or fix formatting
  *   yad-cli git-diff …                 external diff driver for `git diff`
+ *   yad-cli merge <base> <ours> <theirs>  semantic three-way merge
+ *   yad-cli merge-driver …             merge driver for `git merge` / `rebase`
  *
  * Exit codes: 0 — no differences / nothing to format; 1 — differences found /
  * files need formatting; 2 — error (bad arguments, unreadable or invalid files).
  */
+import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import {
-  compareTexts, defaultOptions, formatPath, formatText, parsePath,
-  type Change, type CompareOptions, type FormatOptions, type ResourceDiff,
+  compareTexts, defaultOptions, formatPath, formatText, merge3, parsePath, resolveConflict,
+  type Change, type MergeConflict, type CompareOptions, type FormatOptions, type ResourceDiff,
 } from "../lib/semantic";
 import { decodeText, encodeText } from "../lib/textio";
 
@@ -31,7 +34,10 @@ const HELP = `yad-cli — YAML Ain't Different, in the terminal
 Usage:
   yad-cli diff <left> <right> [options]     compare two files or two folders
   yad-cli format [--write] <path>... [opts] check formatting (or fix it with --write)
+  yad-cli merge <base> <ours> <theirs> [options]
+                                            three-way merge of two edits of one file
   yad-cli git-diff <git external diff args> used by git, see below
+  yad-cli merge-driver %O %A %B %P [%L]     used by git, see below
 
 diff options:
   --output text|markdown|json   report format (default: text)
@@ -48,17 +54,27 @@ format options:
   --flush-lists                 "key:\\n- item" instead of "key:\\n  - item"
   --no-sort-k8s                 keep Kubernetes keys in their order
 
-Exit codes: 0 no differences / formatted, 1 differences / needs formatting, 2 error.
+merge options:
+  -o, --out <file>              write the result there (default: standard output)
+  --prefer ours|theirs          settle conflicts with that side (default: report them, write nothing)
+  The result keeps the formatting and comments of <ours>.
+
+Exit codes: 0 no differences / formatted / merged, 1 differences / needs
+formatting / conflicts, 2 error.
 
 Semantic "git diff" for YAML/JSON:
   git config --global diff.yad.command "yad-cli git-diff"
   echo '*.yaml diff=yad' >> .gitattributes   (also *.yml, *.json)
+
+Semantic merges in "git merge" / "git rebase" (conflicts fall back to git's markers):
+  git config --global merge.yad.driver "yad-cli merge-driver %O %A %B %P %L"
+  echo '*.yaml merge=yad' >> .gitattributes
 `;
 
 // ---- arguments -----------------------------------------------------------------
 
 type Flags = { pos: string[]; opts: Map<string, string[]> };
-const VALUED = new Set(["--output", "--ignore", "--indent"]);
+const VALUED = new Set(["--output", "--ignore", "--indent", "-o", "--out", "--prefer"]);
 
 function parseArgs(args: string[]): Flags {
   const pos: string[] = [];
@@ -78,6 +94,7 @@ function parseArgs(args: string[]): Flags {
 
 const KNOWN = {
   diff: ["--output", "--ignore", "--no-default-ignore", "--strict-empty", "--no-cross-namespace", "--order-matters", "-q", "--quiet"],
+  merge: ["-o", "--out", "--prefer", "-q", "--quiet"],
   format: ["--write", "--indent", "--flush-lists", "--no-sort-k8s", "-q", "--quiet"],
 };
 
@@ -312,6 +329,70 @@ function cmdFormat(f: Flags, io: Io): number {
   return needs && !write ? 1 : 0;
 }
 
+// ---- merge -----------------------------------------------------------------------
+
+function conflictLine(c: MergeConflict): string {
+  const where = c.label + (c.path ? ` ${formatPath(c.path)}` : "");
+  return `conflict: ${where}: base ${show(c.base)}, ours ${show(c.ours)}, theirs ${show(c.theirs)}`;
+}
+
+function cmdMerge(f: Flags, io: Io): number {
+  checkKnown(f, KNOWN.merge);
+  if (f.pos.length !== 3) throw new Error("merge needs three files: <base> <ours> <theirs>");
+  const prefer = f.opts.get("--prefer")?.at(-1);
+  if (prefer !== undefined && prefer !== "ours" && prefer !== "theirs") throw new Error("--prefer must be ours or theirs");
+  const out = (f.opts.get("-o") ?? f.opts.get("--out"))?.at(-1);
+  const quiet = f.opts.has("-q") || f.opts.has("--quiet");
+  for (const p of f.pos) if (kindOf(p) !== "file") throw new Error(`${p}: not a file`);
+  const [base, ours, theirs] = f.pos.map(read);
+  const m = merge3(base.text, ours.text, theirs.text);
+  if (m.errors.length) {
+    m.errors.forEach((e) => io.err(e));
+    return 2;
+  }
+  let text = m.text;
+  if (prefer === "theirs")
+    for (const c of m.conflicts) {
+      const r = resolveConflict(text, theirs.text, c);
+      if (r.errors.length) { r.errors.forEach((e) => io.err(e)); return 2; }
+      text = r.text;
+    }
+  if (!quiet) m.conflicts.forEach((c) => io.err(conflictLine(c) + (prefer ? ` → ${prefer}` : "")));
+  if (m.conflicts.length && !prefer) {
+    if (!quiet) io.err(`${m.conflicts.length} conflict(s), nothing written; resolve them in YAD or use --prefer`);
+    return 1;
+  }
+  const bytes = encodeText({ ...ours, text });
+  if (out) writeFileSync(out, bytes);
+  else io.out(bytes.replace(/\r?\n$/, ""));
+  return 0;
+}
+
+/**
+ * git merge driver: `%O %A %B %P [%L]` — base, ours (the result goes here),
+ * theirs, path, conflict marker size. Exit 0 when merged cleanly. On
+ * semantic conflicts (or files YAD cannot parse) falls back to git's own
+ * line merge, so the file gets the usual conflict markers.
+ */
+function cmdMergeDriver(args: string[], io: Io): number {
+  if (args.length < 3) throw new Error("merge-driver is called by git (merge.<driver>.driver), not directly");
+  const [baseFile, oursFile, theirsFile, path = oursFile, markers] = args;
+  const [base, ours, theirs] = [baseFile, oursFile, theirsFile].map(read);
+  const m = merge3(base.text, ours.text, theirs.text);
+  if (!m.errors.length && !m.conflicts.length) {
+    writeFileSync(oursFile, encodeText({ ...ours, text: m.text }));
+    return 0;
+  }
+  if (m.errors.length) io.err(`yad: ${path}: ${m.errors[0]}`);
+  else {
+    m.conflicts.forEach((c) => io.err(`yad: ${path}: ${conflictLine(c)}`));
+    io.err(`yad: ${path}: ${m.conflicts.length} conflict(s); resolve with "git mergetool -t yad"`);
+  }
+  const r = spawnSync("git", ["merge-file", ...(markers ? [`--marker-size=${markers}`] : []), "-L", "ours", "-L", "base", "-L", "theirs", oursFile, baseFile, theirsFile], { encoding: "utf8" });
+  if (r.error) throw r.error;
+  return r.status === 0 ? 0 : 1;
+}
+
 // ---- git -------------------------------------------------------------------------
 
 /**
@@ -345,13 +426,15 @@ export function main(argv: string[], io: Io): number {
       case "diff": return cmdDiff(parseArgs(rest), io);
       case "format": return cmdFormat(parseArgs(rest), io);
       case "git-diff": return cmdGitDiff(rest, io);
+      case "merge": return cmdMerge(parseArgs(rest), io);
+      case "merge-driver": return cmdMergeDriver(rest, io);
       case "--version": case "-v": io.out(VERSION); return 0;
       case undefined: case "help": case "--help": case "-h": io.out(HELP); return cmd ? 0 : 2;
       default: throw new Error(`unknown command ${cmd}`);
     }
   } catch (e) {
     io.err(`yad-cli: ${e instanceof Error ? e.message : String(e)}`);
-    if (cmd !== "git-diff") io.err("Run yad-cli --help for usage.");
+    if (cmd !== "git-diff" && cmd !== "merge-driver") io.err("Run yad-cli --help for usage.");
     return 2;
   }
 }
