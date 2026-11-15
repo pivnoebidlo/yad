@@ -30,6 +30,12 @@ A folder with `kustomization.yaml` or `Chart.yaml` can be compared as its
 rendered output (`kustomize build` / `helm template`); `helm` and `kustomize`
 must be installed.
 
+**Secrets**: values in `data` of a Kubernetes `Secret` are shown decoded from
+base64 in the Semantic view and in the lists of changes, and edits there are
+encoded back — files always keep base64. Values that are not text stay as
+base64. Can be turned off in Settings → Comparison. `yad-cli` hides Secret
+values in its reports (`--show-secrets` shows them decoded).
+
 ## Git
 
 **YAD as `git difftool`** — the window opens with the changed files; edits

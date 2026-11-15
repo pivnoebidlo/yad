@@ -2,6 +2,7 @@ import { LineCounter, isMap, isScalar, isSeq, parseAllDocuments, stringify, type
 import { KEY_PRIORITY } from "./config";
 import { optionsForKind } from "./kinds";
 import type { CompareOptions, PathSeg, Resource, ResourceDiff, SourceCtx, SourceRange } from "./types";
+import { decodeBase64Text, encodeSecretsInText, isSecret } from "./secrets";
 import { deref, fieldName, getScalar, isEmptyAfterIgnore, isIgnored, keyString, locatePath, pickMergeKey, toJS } from "./util";
 
 const keyRank = (k: string) => {
@@ -45,8 +46,27 @@ function canonical(n0: unknown, ctx: SourceCtx, path: PathSeg[], opts: CompareOp
 }
 
 export function normalizeResource(r: Resource, opts: CompareOptions): string {
+  return normalizeWithSecrets(r, opts).text;
+}
+
+/** Normalized text; for a Secret (if enabled) `data` values are shown decoded, except `rawKeys` (not text). */
+function normalizeWithSecrets(r: Resource, opts: CompareOptions): { text: string; rawKeys?: Set<string>; decoded?: number } {
   const o = optionsForKind(r.docKind, opts);
-  return stringify(canonical(r.node, r.ctx, [], o, o.ignore), { lineWidth: 0, indentSeq: true });
+  const value = canonical(r.node, r.ctx, [], o, o.ignore);
+  let rawKeys: Set<string> | undefined, decoded = 0;
+  if (opts.decodeSecrets && isSecret(r) && value instanceof Map && value.get("data") instanceof Map) {
+    rawKeys = new Set();
+    const data = value.get("data") as Map<string, unknown>;
+    for (const [k, v] of data) {
+      const d = decodeBase64Text(v);
+      if (d === undefined) rawKeys.add(k);
+      else {
+        data.set(k, d);
+        decoded++;
+      }
+    }
+  }
+  return { text: stringify(value, { lineWidth: 0, indentSeq: true }), rawKeys, decoded };
 }
 
 export interface NormalizedView {
@@ -54,6 +74,11 @@ export interface NormalizedView {
   b: string;
   /** Range of a resource (or a path inside it) in the normalized text of one side. */
   locate(side: "a" | "b", resourceKey: string, path?: PathSeg[]): SourceRange | undefined;
+  /**
+   * Normalized text of one side (as shown, possibly edited) with Secret
+   * values encoded back to base64, i.e. comparable with the source file.
+   */
+  encode(side: "a" | "b", text: string): string;
   /** Resource and path of the deepest node at `offset` in one side's normalized text. */
   pathAt(side: "a" | "b", offset: number): { key: string; path: PathSeg[] } | undefined;
 }
@@ -95,12 +120,15 @@ function pathInside(root: Node, offset: number, ctx: SourceCtx, opts: CompareOpt
 export function renderNormalized(resources: ResourceDiff[], opts: CompareOptions): NormalizedView {
   const parts = { a: [] as string[], b: [] as string[] };
   const keys = { a: [] as string[], b: [] as string[] };
+  const raw = { a: new Map<string, Set<string>>(), b: new Map<string, Set<string>>() };
   for (const r of resources) {
-    const header = `# ${r.label}\n`;
     for (const side of ["a", "b"] as const) {
       const res = r[side];
       if (!res) continue;
-      parts[side].push(header + normalizeResource(res, opts));
+      const n = normalizeWithSecrets(res, opts);
+      if (n.rawKeys) raw[side].set(res.key, n.rawKeys);
+      const note = n.decoded ? "  (data: decoded from base64, saved encoded)" : "";
+      parts[side].push(`# ${r.label}${note}\n${n.text}`);
       keys[side].push(r.key);
     }
   }
@@ -123,6 +151,9 @@ export function renderNormalized(resources: ResourceDiff[], opts: CompareOptions
   return {
     a,
     b,
+    encode(side, text) {
+      return opts.decodeSecrets ? encodeSecretsInText(text, (k) => raw[side].get(k)) : text;
+    },
     locate(side, resourceKey, path = []) {
       const entry = (index[side] ??= build(side)).get(resourceKey);
       return entry && locatePath(entry.node, path, entry.ctx);

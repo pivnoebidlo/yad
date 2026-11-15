@@ -15,7 +15,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import {
-  compareTexts, defaultOptions, formatPath, formatText, merge3, parsePath, resolveConflict,
+  compareTexts, decodeSecretValue, defaultOptions, formatPath, formatText, hideSecretValue, isSecretKey, merge3, parsePath, presentSecrets, resolveConflict,
   type Change, type MergeConflict, type CompareOptions, type FormatOptions, type ResourceDiff,
 } from "../lib/semantic";
 import { decodeText, encodeText } from "../lib/textio";
@@ -46,6 +46,7 @@ diff options:
   --strict-empty                {} and [] are not the same as a missing key
   --no-cross-namespace          never pair resources from different namespaces
   --order-matters               files that differ only in order/formatting count as different
+  --show-secrets                show Secret values decoded (default: hidden, safe for CI logs)
   -q, --quiet                   no report, only the exit code
 
 format options:
@@ -57,13 +58,14 @@ format options:
 merge options:
   -o, --out <file>              write the result there (default: standard output)
   --prefer ours|theirs          settle conflicts with that side (default: report them, write nothing)
+  --show-secrets                show Secret values in conflict reports (default: hidden)
   The result keeps the formatting and comments of <ours>.
 
 Exit codes: 0 no differences / formatted / merged, 1 differences / needs
 formatting / conflicts, 2 error.
 
 Semantic "git diff" for YAML/JSON:
-  git config --global diff.yad.command "yad-cli git-diff"
+  git config --global diff.yad.command "yad-cli git-diff"   (add --show-secrets to see Secret values)
   echo '*.yaml diff=yad' >> .gitattributes   (also *.yml, *.json)
 
 Semantic merges in "git merge" / "git rebase" (conflicts fall back to git's markers):
@@ -93,8 +95,8 @@ function parseArgs(args: string[]): Flags {
 }
 
 const KNOWN = {
-  diff: ["--output", "--ignore", "--no-default-ignore", "--strict-empty", "--no-cross-namespace", "--order-matters", "-q", "--quiet"],
-  merge: ["-o", "--out", "--prefer", "-q", "--quiet"],
+  diff: ["--output", "--ignore", "--no-default-ignore", "--strict-empty", "--no-cross-namespace", "--order-matters", "--show-secrets", "-q", "--quiet"],
+  merge: ["-o", "--out", "--prefer", "--show-secrets", "-q", "--quiet"],
   format: ["--write", "--indent", "--flush-lists", "--no-sort-k8s", "-q", "--quiet"],
 };
 
@@ -175,6 +177,10 @@ export function diffPaths(left: string, right: string, opts: CompareOptions): Fi
     diffTexts(rel, la.has(rel) ? read(join(left, rel)).text : null, lb.has(rel) ? read(join(right, rel)).text : null, opts),
   );
 }
+
+/** Secret values in reports: hidden unless asked for (reports end up in CI logs). */
+const withSecrets = (reports: FileReport[], show: boolean): FileReport[] =>
+  reports.map((r) => ({ ...r, resources: presentSecrets(r.resources, show ? "decode" : "hide") }));
 
 const differs = (r: FileReport, orderMatters: boolean) => r.status !== "equal" && (orderMatters || r.status !== "reordered");
 
@@ -282,7 +288,7 @@ function cmdDiff(f: Flags, io: Io): number {
   const output = f.opts.get("--output")?.at(-1) ?? "text";
   if (!["text", "markdown", "json"].includes(output)) throw new Error(`unknown --output ${output}`);
   const orderMatters = f.opts.has("--order-matters");
-  const reports = diffPaths(f.pos[0], f.pos[1], compareOptions(f));
+  const reports = withSecrets(diffPaths(f.pos[0], f.pos[1], compareOptions(f)), f.opts.has("--show-secrets"));
   if (!f.opts.has("-q") && !f.opts.has("--quiet"))
     io.out(output === "json" ? renderJson(reports) : output === "markdown" ? renderMarkdown(reports, orderMatters) : renderText(reports, io, orderMatters));
   if (reports.some((r) => r.status === "error")) return 2;
@@ -331,9 +337,10 @@ function cmdFormat(f: Flags, io: Io): number {
 
 // ---- merge -----------------------------------------------------------------------
 
-function conflictLine(c: MergeConflict): string {
+function conflictLine(c: MergeConflict, showSecrets = false): string {
   const where = c.label + (c.path ? ` ${formatPath(c.path)}` : "");
-  return `conflict: ${where}: base ${show(c.base)}, ours ${show(c.ours)}, theirs ${show(c.theirs)}`;
+  const v = (x: unknown) => show(isSecretKey(c.key) ? (showSecrets ? decodeSecretValue : hideSecretValue)(c.path ?? [], x) : x);
+  return `conflict: ${where}: base ${v(c.base)}, ours ${v(c.ours)}, theirs ${v(c.theirs)}`;
 }
 
 function cmdMerge(f: Flags, io: Io): number {
@@ -357,7 +364,7 @@ function cmdMerge(f: Flags, io: Io): number {
       if (r.errors.length) { r.errors.forEach((e) => io.err(e)); return 2; }
       text = r.text;
     }
-  if (!quiet) m.conflicts.forEach((c) => io.err(conflictLine(c) + (prefer ? ` → ${prefer}` : "")));
+  if (!quiet) m.conflicts.forEach((c) => io.err(conflictLine(c, f.opts.has("--show-secrets")) + (prefer ? ` → ${prefer}` : "")));
   if (m.conflicts.length && !prefer) {
     if (!quiet) io.err(`${m.conflicts.length} conflict(s), nothing written; resolve them in YAD or use --prefer`);
     return 1;
@@ -401,6 +408,8 @@ function cmdMergeDriver(args: string[], io: Io): number {
  * Must exit 0, otherwise git stops.
  */
 function cmdGitDiff(args: string[], io: Io): number {
+  const showSecrets = args[0] === "--show-secrets";
+  if (showSecrets) args = args.slice(1);
   if (args.length === 1) {
     io.out(`* Unmerged path ${args[0]}`);
     return 0;
@@ -409,7 +418,7 @@ function cmdGitDiff(args: string[], io: Io): number {
   const [path, oldFile, , , newFile] = args;
   const text = (p: string) => (p === "/dev/null" ? null : read(p).text);
   const color = io.color || process.env.GIT_PAGER_IN_USE === "true";
-  const r = diffTexts(path, text(oldFile), text(newFile), defaultOptions());
+  const [r] = withSecrets([diffTexts(path, text(oldFile), text(newFile), defaultOptions())], showSecrets);
   const c = (code: string, s: string) => (color ? `\x1b[${code}m${s}\x1b[0m` : s);
   io.out(c("1", `yad ${path}`) + ` — ${STATUS_TEXT[r.status]}`);
   const body = renderText([r], { color }).split("\n").slice(1).join("\n");

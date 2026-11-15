@@ -37,6 +37,7 @@ export const defaultOptions = (): CompareOptions => ({
   fallbackMergeKeys: ["name"],
   emptyEqualsMissing: true,
   crossNamespace: true,
+  decodeSecrets: true,
 });
 
 /** Keys rendered first in normalized output; everything else is alphabetical. */

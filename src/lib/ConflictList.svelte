@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { shortPath, type MergeConflict } from "./semantic";
+  import { decodeSecretValue, isSecretKey, shortPath, type MergeConflict } from "./semantic";
+  import { settings } from "./prefs.svelte";
   import { t, tn } from "./i18n.svelte";
 
   export type Pick = "ours" | "theirs";
@@ -15,7 +16,8 @@
 
   const open = $derived(conflicts.filter((_, i) => !choice[i]).length);
 
-  function short(v: unknown): string {
+  function short(c: MergeConflict, v: unknown): string {
+    if (settings.decodeSecrets && isSecretKey(c.key)) v = decodeSecretValue(c.path ?? [], v);
     if (v === undefined) return t("notThere");
     const s = typeof v === "string" ? v : JSON.stringify(v);
     return s.length > 60 ? s.slice(0, 57) + "…" : s;
@@ -40,9 +42,9 @@
           <span class="path">{c.path ? shortPath(c.path) : t("wholeResource")}</span>
         </button>
         <div class="values">
-          <span class="k">{t("mergeBase")}</span><span class="v">{short(c.base)}</span>
-          <span class="k">{t("mergeOurs")}</span><span class="v">{short(c.ours)}</span>
-          <span class="k">{t("mergeTheirs")}</span><span class="v">{short(c.theirs)}</span>
+          <span class="k">{t("mergeBase")}</span><span class="v">{short(c, c.base)}</span>
+          <span class="k">{t("mergeOurs")}</span><span class="v">{short(c, c.ours)}</span>
+          <span class="k">{t("mergeTheirs")}</span><span class="v">{short(c, c.theirs)}</span>
         </div>
         <div class="pick">
           <button class:on={choice[i] === "ours"} onclick={() => onpick(i, "ours")} title={t("mergeOursTitle")}>{t("pickOurs")}</button>

@@ -15,6 +15,7 @@ export { alignOrder, type AlignResult } from "./align";
 export { renderNormalized, normalizeResource, type NormalizedView } from "./normalize";
 export { planApply, applyEdits, type ApplyItem, type ApplyResult, type Direction, type Edit } from "./patch";
 export { merge3, resolveConflict, valueAt, type MergeConflict, type MergeResult } from "./merge3";
+export { decodeBase64Text, decodeSecretValue, encodeBase64Text, hideSecretValue, isSecret, isSecretKey, presentSecrets, HIDDEN } from "./secrets";
 export { detectKind, optionsForKind, KIND_LABELS, PIPELINE_KINDS, type DocKind } from "./kinds";
 
 const sortKey = (r: ResourceDiff) => {
