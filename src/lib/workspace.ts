@@ -19,16 +19,7 @@ export interface Buf {
   stamp?: string | null;
 }
 
-/** Split a file's content into "\n"-text plus its line ending and BOM. */
-export function decodeText(raw: string): { text: string; eol: Buf["eol"]; bom: boolean } {
-  const bom = raw.startsWith("\uFEFF");
-  const body = bom ? raw.slice(1) : raw;
-  return { text: body.replace(/\r\n?/g, "\n"), eol: body.includes("\r\n") ? "\r\n" : "\n", bom };
-}
-
-/** File content to write for a buffer. */
-export const encodeText = (b: Pick<Buf, "text" | "eol" | "bom">) =>
-  (b.bom ? "\uFEFF" : "") + (b.eol === "\n" ? b.text : b.text.replace(/\n/g, b.eol));
+export { decodeText, encodeText } from "./textio";
 
 /**
  * changed — semantic differences; reordered — same content, different text;

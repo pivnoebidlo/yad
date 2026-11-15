@@ -36,6 +36,12 @@ jobs:
       - run: npm run check
       - run: npm run build
 
-      - name: Check Rust backend
+      - name: Build and smoke-test the CLI
+        run: |
+          npm run build:cli
+          node dist-cli/yad-cli.mjs --version
+          node dist-cli/yad-cli.mjs diff src/lib/semantic/fixtures/manifest.yaml src/lib/semantic/fixtures/manifest.yaml
+
+      - name: Test Rust backend
         working-directory: src-tauri
-        run: cargo check --locked
+        run: cargo test --locked

@@ -20,10 +20,74 @@ npm install
 npm run tauri dev      # dev mode with hot reload
 npm run tauri build    # release .app + .dmg in src-tauri/target/release/bundle/
 npm run check          # type check
-npm test               # unit tests (semantic engine)
+npm test               # unit tests (semantic engine, CLI)
+npm run build:cli      # command-line tool → dist-cli/yad-cli.mjs
 ```
 
-Run with files or folders: `YAD.app/Contents/MacOS/YAD left.yaml right.yaml`, `… stage/ prod/`
+Run with files or folders: `YAD.app/Contents/MacOS/yad left.yaml right.yaml`, `… stage/ prod/`
+
+A folder with `kustomization.yaml` or `Chart.yaml` can be compared as its
+rendered output (`kustomize build` / `helm template`); `helm` and `kustomize`
+must be installed.
+
+## Git
+
+**YAD as `git difftool`** — the window opens with the changed files; edits
+saved on the working-tree side go straight to your files:
+
+```sh
+git config --global difftool.yad.cmd '/Applications/YAD.app/Contents/MacOS/yad "$LOCAL" "$REMOTE"'
+git difftool -t yad -d            # working tree vs index, all files at once
+git difftool -t yad -d main       # working tree vs a branch
+git difftool -t yad -d HEAD~3 HEAD
+```
+
+**Semantic `git diff` in the terminal** (needs `yad-cli`, see below):
+
+```sh
+git config --global diff.yad.command 'yad-cli git-diff'
+printf '*.yaml diff=yad\n*.yml diff=yad\n' >> .gitattributes
+git diff                          # YAML files now show key-level changes
+git log -p --ext-diff -- k8s/
+```
+
+## Command line: `yad-cli`
+
+The same comparison engine without a window — for terminals and CI. It is a
+single JavaScript file (Node.js 18+), attached to every release as
+`yad-cli.mjs` (or build it: `npm run build:cli`). To have it as a command:
+
+```sh
+curl -sSLo ~/.local/bin/yad-cli https://github.com/pivnoebidlo/yad/releases/latest/download/yad-cli.mjs
+chmod +x ~/.local/bin/yad-cli     # any folder on PATH
+```
+
+```sh
+node yad-cli.mjs diff stage/ prod/                  # report; exit 1 if anything differs
+node yad-cli.mjs diff a.yaml b.yaml --output json   # or --output markdown (for PR comments)
+node yad-cli.mjs format k8s/                        # exit 1 if files need formatting
+node yad-cli.mjs format --write k8s/                # fix them
+node yad-cli.mjs --help
+```
+
+Exit codes: `0` — no differences / already formatted, `1` — differences /
+needs formatting, `2` — error. Files that differ only in key order or
+formatting are not a difference (use `--order-matters` to change that).
+
+Example CI step (GitHub Actions) that fails when environments drift:
+
+```yaml
+- run: curl -sSLo yad-cli.mjs https://github.com/pivnoebidlo/yad/releases/latest/download/yad-cli.mjs
+- run: node yad-cli.mjs diff --ignore spec.replicas envs/stage envs/prod
+```
+
+Pre-commit hook (`.git/hooks/pre-commit`) that keeps manifests formatted:
+
+```sh
+#!/bin/sh
+files=$(git diff --cached --name-only --diff-filter=ACM -- '*.yaml' '*.yml' '*.json')
+[ -z "$files" ] || node yad-cli.mjs format $files
+```
 
 ## Settings
 
