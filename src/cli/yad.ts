@@ -12,13 +12,14 @@
  * files need formatting; 2 — error (bad arguments, unreadable or invalid files).
  */
 import { spawnSync } from "node:child_process";
-import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import {
-  compareTexts, decodeSecretValue, defaultOptions, formatPath, formatText, hideSecretValue, isSecretKey, merge3, parsePath, presentSecrets, resolveConflict,
+  DEFAULT_IGNORE, compareTexts, decodeSecretValue, defaultOptions, formatPath, formatText, hideSecretValue, isSecretKey, merge3, parsePath, presentSecrets, resolveConflict,
   type Change, type MergeConflict, type CompareOptions, type FormatOptions, type ResourceDiff,
 } from "../lib/semantic";
 import { decodeText, encodeText } from "../lib/textio";
+import { CONFIG_NAME, applyProjectCompare, applyProjectFormat, parseProjectConfig, type ProjectConfig } from "../lib/projectConfig";
 
 export interface Io {
   out: (s: string) => void;
@@ -47,6 +48,7 @@ diff options:
   --no-cross-namespace          never pair resources from different namespaces
   --order-matters               files that differ only in order/formatting count as different
   --show-secrets                show Secret values decoded (default: hidden, safe for CI logs)
+  --no-config                   do not read .yad.yaml (diff, format, merge)
   -q, --quiet                   no report, only the exit code
 
 format options:
@@ -60,6 +62,9 @@ merge options:
   --prefer ours|theirs          settle conflicts with that side (default: report them, write nothing)
   --show-secrets                show Secret values in conflict reports (default: hidden)
   The result keeps the formatting and comments of <ours>.
+
+Project settings: a .yad.yaml in the compared folder or above (up to the
+repository root) sets ignored paths and formatting for everyone; flags win.
 
 Exit codes: 0 no differences / formatted / merged, 1 differences / needs
 formatting / conflicts, 2 error.
@@ -95,18 +100,19 @@ function parseArgs(args: string[]): Flags {
 }
 
 const KNOWN = {
-  diff: ["--output", "--ignore", "--no-default-ignore", "--strict-empty", "--no-cross-namespace", "--order-matters", "--show-secrets", "-q", "--quiet"],
-  merge: ["-o", "--out", "--prefer", "--show-secrets", "-q", "--quiet"],
-  format: ["--write", "--indent", "--flush-lists", "--no-sort-k8s", "-q", "--quiet"],
+  diff: ["--output", "--ignore", "--no-default-ignore", "--strict-empty", "--no-cross-namespace", "--order-matters", "--show-secrets", "--no-config", "-q", "--quiet"],
+  merge: ["-o", "--out", "--prefer", "--show-secrets", "--no-config", "-q", "--quiet"],
+  format: ["--no-config", "--write", "--indent", "--flush-lists", "--no-sort-k8s", "-q", "--quiet"],
 };
 
 function checkKnown(f: Flags, known: string[]) {
   for (const k of f.opts.keys()) if (!known.includes(k)) throw new Error(`unknown option ${k}`);
 }
 
-function compareOptions(f: Flags): CompareOptions {
-  const o = defaultOptions();
-  if (f.opts.has("--no-default-ignore")) o.ignore = [];
+/** Defaults, then the project's .yad.yaml, then explicit flags. */
+function compareOptions(f: Flags, cfg: ProjectConfig | null = null): CompareOptions {
+  const o = applyProjectCompare(defaultOptions(), cfg);
+  if (f.opts.has("--no-default-ignore")) o.ignore = o.ignore.filter((p) => !DEFAULT_IGNORE.some((d) => d.join("\0") === p.join("\0")));
   for (const p of f.opts.get("--ignore") ?? []) {
     const parsed = parsePath(p);
     if (!parsed) throw new Error(`invalid path for --ignore: ${p}`);
@@ -116,6 +122,31 @@ function compareOptions(f: Flags): CompareOptions {
   if (f.opts.has("--no-cross-namespace")) o.crossNamespace = false;
   return o;
 }
+
+/**
+ * The .yad.yaml that applies to `start`: in its folder or above, up to the
+ * repository root. Invalid settings are an error (exit 2) unless `lenient`
+ * (git drivers must not fail on them; they only warn).
+ */
+export function findProjectConfig(start: string, io: Io, lenient = false): ProjectConfig | null {
+  let dir = resolve(start);
+  if (!existsSync(dir) || !statSync(dir).isDirectory()) dir = dirname(dir);
+  for (;;) {
+    const file = join(dir, CONFIG_NAME);
+    if (existsSync(file) && statSync(file).isFile()) {
+      const { config, errors } = parseProjectConfig(readFileSync(file, "utf8"));
+      if (errors.length && !lenient) throw new Error(`${file}: ${errors.join("; ")}`);
+      errors.forEach((e) => io.err(`yad: ${file}: ${e}`));
+      return config;
+    }
+    if (existsSync(join(dir, ".git"))) return null;
+    const up = dirname(dir);
+    if (up === dir) return null;
+    dir = up;
+  }
+}
+
+const configFor = (f: Flags, start: string, io: Io) => (f.opts.has("--no-config") ? null : findProjectConfig(start, io));
 
 // ---- files -----------------------------------------------------------------------
 
@@ -288,7 +319,7 @@ function cmdDiff(f: Flags, io: Io): number {
   const output = f.opts.get("--output")?.at(-1) ?? "text";
   if (!["text", "markdown", "json"].includes(output)) throw new Error(`unknown --output ${output}`);
   const orderMatters = f.opts.has("--order-matters");
-  const reports = withSecrets(diffPaths(f.pos[0], f.pos[1], compareOptions(f)), f.opts.has("--show-secrets"));
+  const reports = withSecrets(diffPaths(f.pos[0], f.pos[1], compareOptions(f, configFor(f, f.pos[0], io))), f.opts.has("--show-secrets"));
   if (!f.opts.has("-q") && !f.opts.has("--quiet"))
     io.out(output === "json" ? renderJson(reports) : output === "markdown" ? renderMarkdown(reports, orderMatters) : renderText(reports, io, orderMatters));
   if (reports.some((r) => r.status === "error")) return 2;
@@ -300,9 +331,11 @@ function cmdDiff(f: Flags, io: Io): number {
 function cmdFormat(f: Flags, io: Io): number {
   checkKnown(f, KNOWN.format);
   if (!f.pos.length) throw new Error("format needs at least one file or folder");
-  const indent = Number(f.opts.get("--indent")?.at(-1) ?? 2);
-  if (![2, 4].includes(indent)) throw new Error("--indent must be 2 or 4");
-  const opts: FormatOptions = { indent, indentSeq: !f.opts.has("--flush-lists"), sortKubernetesKeys: !f.opts.has("--no-sort-k8s") };
+  const opts: FormatOptions = applyProjectFormat({ indent: 2, indentSeq: true, sortKubernetesKeys: true }, configFor(f, f.pos[0], io));
+  if (f.opts.has("--indent")) opts.indent = Number(f.opts.get("--indent")!.at(-1));
+  if (![2, 4].includes(opts.indent)) throw new Error("--indent must be 2 or 4");
+  if (f.opts.has("--flush-lists")) opts.indentSeq = false;
+  if (f.opts.has("--no-sort-k8s")) opts.sortKubernetesKeys = false;
   const write = f.opts.has("--write");
   const quiet = f.opts.has("-q") || f.opts.has("--quiet");
 
@@ -352,7 +385,7 @@ function cmdMerge(f: Flags, io: Io): number {
   const quiet = f.opts.has("-q") || f.opts.has("--quiet");
   for (const p of f.pos) if (kindOf(p) !== "file") throw new Error(`${p}: not a file`);
   const [base, ours, theirs] = f.pos.map(read);
-  const m = merge3(base.text, ours.text, theirs.text);
+  const m = merge3(base.text, ours.text, theirs.text, compareOptions(f, configFor(f, f.pos[1], io)));
   if (m.errors.length) {
     m.errors.forEach((e) => io.err(e));
     return 2;
@@ -418,7 +451,8 @@ function cmdGitDiff(args: string[], io: Io): number {
   const [path, oldFile, , , newFile] = args;
   const text = (p: string) => (p === "/dev/null" ? null : read(p).text);
   const color = io.color || process.env.GIT_PAGER_IN_USE === "true";
-  const [r] = withSecrets([diffTexts(path, text(oldFile), text(newFile), defaultOptions())], showSecrets);
+  const opts = applyProjectCompare(defaultOptions(), findProjectConfig(path, io, true));
+  const [r] = withSecrets([diffTexts(path, text(oldFile), text(newFile), opts)], showSecrets);
   const c = (code: string, s: string) => (color ? `\x1b[${code}m${s}\x1b[0m` : s);
   io.out(c("1", `yad ${path}`) + ` — ${STATUS_TEXT[r.status]}`);
   const body = renderText([r], { color }).split("\n").slice(1).join("\n");

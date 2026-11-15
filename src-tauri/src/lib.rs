@@ -16,6 +16,26 @@ fn write_text(path: String, contents: String) -> Result<(), String> {
     std::fs::write(&path, contents).map_err(|e| format!("{path}: {e}"))
 }
 
+/// `.yad.yaml` for a compared path: look in its folder and up, stopping at
+/// the repository root (a folder with `.git`). Returns (path, contents).
+#[tauri::command]
+fn find_config(path: String) -> Option<(String, String)> {
+    let p = PathBuf::from(&path);
+    let mut dir = if p.is_dir() { Some(p.as_path()) } else { p.parent() };
+    while let Some(d) = dir {
+        let cfg = d.join(".yad.yaml");
+        if cfg.is_file() {
+            let text = std::fs::read_to_string(&cfg).ok()?;
+            return Some((cfg.to_string_lossy().into_owned(), text));
+        }
+        if d.join(".git").exists() {
+            return None;
+        }
+        dir = d.parent();
+    }
+    None
+}
+
 /// "file", "dir" or "missing".
 #[tauri::command]
 fn path_kind(path: String) -> &'static str {
@@ -207,6 +227,24 @@ mod tests {
     }
 
     #[test]
+    fn find_config_stops_at_repo_root() {
+        let d = std::env::temp_dir().join(format!("yad-cfg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("repo/.git")).unwrap();
+        std::fs::create_dir_all(d.join("repo/k8s/prod")).unwrap();
+        std::fs::write(d.join("repo/k8s/prod/a.yaml"), "a: 1\n").unwrap();
+        std::fs::write(d.join(".yad.yaml"), "outside: true\n").unwrap();
+        let file = d.join("repo/k8s/prod/a.yaml").to_string_lossy().into_owned();
+        assert_eq!(find_config(file.clone()), None, "must not look above the repository");
+        std::fs::write(d.join("repo/.yad.yaml"), "crossNamespace: false\n").unwrap();
+        let (path, text) = find_config(file).unwrap();
+        assert!(path.ends_with("repo/.yad.yaml"));
+        assert_eq!(text, "crossNamespace: false\n");
+        assert!(find_config(d.join("repo/k8s").to_string_lossy().into()).is_some());
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
     fn merge_args_need_four_paths() {
         let v = |xs: &[&str]| xs.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         let got = parse_merge_args(&v(&["--merge", "/b", "/l", "/r", "/m"])).unwrap();
@@ -254,7 +292,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![read_text, write_text, path_kind, list_files, file_stamps, project_kind, render, initial_paths, merge_args, exit_app])
+        .invoke_handler(tauri::generate_handler![read_text, write_text, path_kind, list_files, file_stamps, project_kind, render, initial_paths, merge_args, exit_app, find_config])
         .run(tauri::generate_context!())
         .expect("error while running yad");
 }
