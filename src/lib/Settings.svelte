@@ -13,9 +13,11 @@
     tab?: Tab;
     /** Path of the project's .yad.yaml, when one applies. */
     project?: string | null;
+    /** "Check for updates" in About. */
+    oncheckupdate?: () => void;
     onclose: () => void;
   }
-  let { tab = $bindable("general"), project = null, onclose }: Props = $props();
+  let { tab = $bindable("general"), project = null, oncheckupdate, onclose }: Props = $props();
 
   const REPO = "https://github.com/pivnoebidlo/yad";
   let version = $state("");
@@ -127,6 +129,8 @@
             {#each themes as th}<option value={th}>{themeLabel(th)}</option>{/each}
           </select>
         </label>
+        <label class="check top"><input type="checkbox" bind:checked={settings.autoUpdate} /> {t("autoUpdate")}</label>
+        <p class="hint">{t("autoUpdateHint")}</p>
       {:else if tab === "comparison"}
         {#if project}<p class="project-note" title={project}>⚑ {t("projectSettingsNote")}</p>{/if}
         <label class="check"><input type="checkbox" bind:checked={settings.ignoreNoise} /> {t("ignoreNoise")}</label>
@@ -178,7 +182,10 @@
           {#if version}<div class="muted">{t("version", { v: version })}</div>{/if}
           <p>{t("aboutText")}</p>
           <p class="muted">{t("aboutAcronym")}</p>
-          <button onclick={() => openUrl(REPO)}>GitHub</button>
+          <div class="row">
+            <button onclick={() => openUrl(REPO)}>GitHub</button>
+            {#if oncheckupdate}<button onclick={oncheckupdate}>{t("checkUpdates")}</button>{/if}
+          </div>
           {#if unlockedToast}<div class="toast">{t("oldschoolUnlocked")}</div>{/if}
         </div>
       {/if}
@@ -204,6 +211,7 @@
   .check { display: flex; gap: 8px; align-items: center; font-weight: 600; }
   .check.top { margin-top: 12px; }
   .project-note { margin: 0 0 4px; padding: 6px 8px; border-radius: 6px; background: var(--accent-soft); font-size: 12px; }
+  .about .row { display: flex; gap: 8px; justify-content: center; }
   .hint { margin: 0; color: var(--muted); font-size: 12px; }
   .warn { margin: 0; color: var(--removed); font-size: 12px; }
   textarea { width: 100%; resize: vertical; font-family: ui-monospace, Menlo, monospace; font-size: 12px; padding: 6px;

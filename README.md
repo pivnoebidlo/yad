@@ -167,6 +167,16 @@ file, and explicit flags win over it.
 | ⌘F | Search |
 | ⌘Z / ⇧⌘Z | Undo / redo |
 
+## Updates
+
+YAD checks GitHub for a new release on start and offers to install it
+(Settings → General; About → *Check for updates*). Packages are signed: the
+public key is in `src-tauri/tauri.conf.json`, the private key and its
+password are the repository secrets `TAURI_SIGNING_PRIVATE_KEY` and
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` used by the release workflow. Losing the
+private key means installed copies can no longer update (they would have to
+be reinstalled by hand), so keep a backup of it.
+
 ## Releases
 
 CI (`.github/workflows/ci.yml`) runs tests, type check and build on every PR

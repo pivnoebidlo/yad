@@ -34,6 +34,10 @@ jobs:
           > The macOS build is not notarized yet. After copying YAD to
           > Applications, run once:
           > `xattr -dr com.apple.quarantine /Applications/YAD.app`
+          >
+          > Installed YAD updates itself (it offers new releases on start), so
+          > this is needed only for the first install. On Linux self-update
+          > works for the `.AppImage`.
           NOTES
           id=$(gh api -X POST "repos/${{ github.repository }}/releases" \
             -f tag_name="$TAG" -f target_commitish="${{ github.sha }}" -f name="$NAME" \
@@ -111,9 +115,13 @@ jobs:
       - run: npm ci
       - run: npm test
 
+      # Updater packages (.app.tar.gz, .AppImage, setup .exe) are signed with this
+      # key; tauri-action also uploads latest.json, which installed apps check.
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           releaseId: ${{ needs.create-release.outputs.id }}
           args: ${{ matrix.args }}

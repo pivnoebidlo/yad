@@ -15,6 +15,8 @@
   import ConflictList, { type Pick } from "./lib/ConflictList.svelte";
   import { settings, compareOptions, effectiveTheme, formatOptions } from "./lib/prefs.svelte";
   import { t, tn } from "./lib/i18n.svelte";
+  import { getVersion } from "@tauri-apps/api/app";
+  import { findUpdate, installUpdate, type Update } from "./lib/updates";
   import { CONFIG_NAME, applyProjectCompare, applyProjectFormat, parseProjectConfig, type ProjectConfig } from "./lib/projectConfig";
   import { actionFor, comboOf, formatCombo, type ActionId } from "./lib/hotkeys";
   import {
@@ -480,6 +482,40 @@
       if (parts.length) showNotice(parts.join(" · "));
     } finally {
       checking = false;
+    }
+  }
+
+  // ---- updates ---------------------------------------------------------------
+
+  let update = $state.raw<Update | null>(null);
+  let updating = false;
+
+  /** Look for a newer release; `manual` (About → Check for updates) also reports "up to date" and errors. */
+  async function checkUpdates(manual = false) {
+    try {
+      update = await findUpdate();
+    } catch (e) {
+      if (manual) await message(String(e), { title: t("updateFailed"), kind: "error" });
+      return;
+    }
+    if (update && manual) {
+      settingsOpen = false;
+      await offerUpdate();
+    } else if (manual) await message(t("updateLatest", { v: await getVersion() }), { title: t("updateTitle"), kind: "info" });
+  }
+
+  async function offerUpdate() {
+    if (!update || updating) return;
+    const ok = await ask(t("updateAsk", { v: update.version, current: update.currentVersion }) + (update.body ? `\n\n${update.body.slice(0, 600)}` : ""),
+      { title: t("updateTitle"), kind: "info" });
+    if (!ok || (anyDirty() && !(await ask(t("updateDirty"), { title: t("updateTitle"), kind: "warning" })))) return;
+    updating = true;
+    try {
+      await installUpdate(update, (p) => showNotice(t("updateDownloading", { p: p === null ? "" : `${Math.round(p * 100)}%` })));
+    } catch (e) {
+      await message(String(e), { title: t("updateFailed"), kind: "error" });
+    } finally {
+      updating = false;
     }
   }
 
@@ -1003,6 +1039,8 @@
 
     mergeArgs().then(async (m) => {
       if (m) return startMerge(m);
+      // Not while git waits for a merge, not in development builds.
+      if (settings.autoUpdate && !import.meta.env.DEV) setTimeout(() => void checkUpdates(), 3000);
       const [a, b] = await initialPaths();
       if (a) await openPath("a", a);
       if (b) await openPath("b", b);
@@ -1141,6 +1179,9 @@
       {/if}
     {/if}
     <span class="spacer"></span>
+    {#if update}
+      <button class="update" onclick={offerUpdate} title={t("updateAvailableTitle", { v: update.version })}>⬆ {t("updateAvailable", { v: update.version })}</button>
+    {/if}
     {#if project}
       <span class="project" class:bad={project.errors.length > 0}
         title={`${t("projectConfigTitle")}\n${project.path}${project.errors.length ? "\n\n" + project.errors.join("\n") : ""}`}>⚑ {CONFIG_NAME}</span>
@@ -1158,7 +1199,7 @@
 </main>
 
 {#if settingsOpen}
-  <Settings bind:tab={settingsTab} project={project?.path} onclose={() => (settingsOpen = false)} />
+  <Settings bind:tab={settingsTab} project={project?.path} oncheckupdate={() => checkUpdates(true)} onclose={() => (settingsOpen = false)} />
 {/if}
 
 <style>
@@ -1191,6 +1232,7 @@
   .tool { font-weight: 400; font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--accent); }
   .notice { color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; max-width: 40%; }
   .spacer { flex: 1; }
+  .update { flex: none; background: var(--added); color: var(--accent-text); border-color: var(--added); }
   .project { flex: none; font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--accent); }
   .project.bad { color: var(--changed); }
   label { display: flex; align-items: center; gap: 4px; }
