@@ -15,9 +15,10 @@
   import ConflictList, { type Pick } from "./lib/ConflictList.svelte";
   import { settings, compareOptions, effectiveTheme, formatOptions } from "./lib/prefs.svelte";
   import { t, tn } from "./lib/i18n.svelte";
+  import { CONFIG_NAME, applyProjectCompare, applyProjectFormat, parseProjectConfig, type ProjectConfig } from "./lib/projectConfig";
   import { actionFor, comboOf, formatCombo, type ActionId } from "./lib/hotkeys";
   import {
-    readText, writeText, initialPaths, baseName, pathKind, listFiles, fileStamps, joinPath, projectKind, render, mergeArgs, exitApp, type RenderTool, type Side,
+    readText, writeText, initialPaths, baseName, pathKind, listFiles, fileStamps, joinPath, projectKind, render, mergeArgs, exitApp, findConfig, type RenderTool, type Side,
   } from "./lib/files";
   import {
     decodeText, diskChange, encodeText, isDirty, minimalEdit, otherSide, statusOf, storeEditorText, type Buf, type Entry, type Marker, type Op,
@@ -80,7 +81,10 @@
   let dropTarget = $state<Side | null>(null);
 
   // Semantic state. `$state.raw`: results hold yaml nodes, which must not be proxied.
-  const opts = $derived(compareOptions());
+  /** `.yad.yaml` of the compared project: its settings override personal ones. */
+  let project = $state.raw<{ path: string; text: string; config: ProjectConfig; errors: string[] } | null>(null);
+  const opts = $derived(applyProjectCompare(compareOptions(), project?.config));
+  const fmtOptions = () => applyProjectFormat(formatOptions(), project?.config);
   let result = $state.raw<CompareResult | null>(null);
   let normalized = $state.raw<NormalizedView | null>(null);
   /** True while a whole document is being replaced (file switch): positions are not mapped. */
@@ -195,6 +199,7 @@
       else if (src.kind === "render") await loadRender(side, src);
       else await loadDir(side, path);
       sources[side] = src;
+      await loadProjectConfig();
     } catch (e) {
       return message(String(e), { title: src.kind === "render" ? t("renderFailed") : t("cannotOpen"), kind: "error" });
     }
@@ -377,7 +382,25 @@
    * outside YAD. Clean files are reloaded quietly; unsaved edits are never
    * dropped without asking.
    */
+  /** Find `.yad.yaml` next to (or above) the compared paths; reloaded when it changes. */
+  async function loadProjectConfig() {
+    let found: [string, string] | null = null;
+    for (const src of [merge ? sources.b : sources.a, merge ? null : sources.b]) {
+      if (src && (found = await findConfig(src.path).catch(() => null))) break;
+    }
+    if (!found) {
+      project = null;
+      return;
+    }
+    const [path, text] = found;
+    if (project?.path === path && project.text === text) return;
+    const { config, errors } = parseProjectConfig(text);
+    project = { path, text, config, errors };
+    if (errors.length) showNotice(`${CONFIG_NAME}: ${errors.join("; ")}`);
+  }
+
   async function checkDisk(rescan: boolean) {
+    if (rescan) await loadProjectConfig();
     if (checking || !entries.length) return;
     checking = true;
     try {
@@ -490,6 +513,7 @@
       saved: false,
     };
     sources = { a: { kind: "file", path: remote }, b: { kind: "file", path: merged } };
+    await loadProjectConfig();
     const e: Entry = {
       rel: "",
       status: "equal",
@@ -673,7 +697,7 @@
 
   async function formatSide(side: Side) {
     flushSemantic();
-    const r = formatText(raw.getDoc(side), formatOptions());
+    const r = formatText(raw.getDoc(side), fmtOptions());
     if (r.error !== undefined) return message(r.error, { title: t("cannotFormat"), kind: "warning" });
     if (!rewriteSide(side, r.text, `✨ ${t("opFormat")}`)) await message(t("alreadyFormatted"), { title: t("format"), kind: "info" });
   }
@@ -689,7 +713,7 @@
   async function bulk(kind: "format" | "align", side: Side) {
     flushSemantic();
     const label = kind === "format" ? `✨ ${t("opFormat")}` : `⇅ ${t("opAlign")}`;
-    const fo = formatOptions();
+    const fo = fmtOptions();
     let changed = 0;
     const skipped: string[] = [];
     for (const e of entries) {
@@ -1104,6 +1128,10 @@
       {/if}
     {/if}
     <span class="spacer"></span>
+    {#if project}
+      <span class="project" class:bad={project.errors.length > 0}
+        title={`${t("projectConfigTitle")}\n${project.path}${project.errors.length ? "\n\n" + project.errors.join("\n") : ""}`}>⚑ {CONFIG_NAME}</span>
+    {/if}
     {#if notice}<span class="notice" title={notice}>{notice}</span>{/if}
     {#if merge}
       <button class="finish" onclick={finishMerge} title={t("mergeFinishTitle")}>✓ {t("mergeFinish")}</button>
@@ -1117,7 +1145,7 @@
 </main>
 
 {#if settingsOpen}
-  <Settings bind:tab={settingsTab} onclose={() => (settingsOpen = false)} />
+  <Settings bind:tab={settingsTab} project={project?.path} onclose={() => (settingsOpen = false)} />
 {/if}
 
 <style>
@@ -1150,6 +1178,8 @@
   .tool { font-weight: 400; font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--accent); }
   .notice { color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; max-width: 40%; }
   .spacer { flex: 1; }
+  .project { flex: none; font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--accent); }
+  .project.bad { color: var(--changed); }
   label { display: flex; align-items: center; gap: 4px; }
   .segmented { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; flex: none; }
   .segmented button { all: unset; padding: 2px 10px; cursor: default; }

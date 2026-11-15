@@ -11,9 +11,11 @@
 
   interface Props {
     tab?: Tab;
+    /** Path of the project's .yad.yaml, when one applies. */
+    project?: string | null;
     onclose: () => void;
   }
-  let { tab = $bindable("general"), onclose }: Props = $props();
+  let { tab = $bindable("general"), project = null, onclose }: Props = $props();
 
   const REPO = "https://github.com/pivnoebidlo/yad";
   let version = $state("");
@@ -126,6 +128,7 @@
           </select>
         </label>
       {:else if tab === "comparison"}
+        {#if project}<p class="project-note" title={project}>⚑ {t("projectSettingsNote")}</p>{/if}
         <label class="check"><input type="checkbox" bind:checked={settings.ignoreNoise} /> {t("ignoreNoise")}</label>
         <p class="hint">{t("ignoreNoiseHint")}</p>
         <textarea bind:value={ignoreText} oninput={onIgnoreInput} disabled={!settings.ignoreNoise} spellcheck="false" rows="10"></textarea>
@@ -138,6 +141,7 @@
         <label class="check top"><input type="checkbox" bind:checked={settings.decodeSecrets} /> {t("decodeSecrets")}</label>
         <p class="hint">{t("decodeSecretsHint")}</p>
       {:else if tab === "formatting"}
+        {#if project}<p class="project-note" title={project}>⚑ {t("projectSettingsNote")}</p>{/if}
         <p class="hint">{t("formatHint")}</p>
         <label class="field">
           <span>{t("indentSize")}</span>
@@ -199,6 +203,7 @@
   .field select { max-width: 240px; }
   .check { display: flex; gap: 8px; align-items: center; font-weight: 600; }
   .check.top { margin-top: 12px; }
+  .project-note { margin: 0 0 4px; padding: 6px 8px; border-radius: 6px; background: var(--accent-soft); font-size: 12px; }
   .hint { margin: 0; color: var(--muted); font-size: 12px; }
   .warn { margin: 0; color: var(--removed); font-size: 12px; }
   textarea { width: 100%; resize: vertical; font-family: ui-monospace, Menlo, monospace; font-size: 12px; padding: 6px;

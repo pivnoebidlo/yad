@@ -126,6 +126,31 @@ ignored server-managed fields, and keyboard shortcuts — every shortcut below
 can be reassigned. Shortcuts match physical keys, so they work with any
 keyboard layout.
 
+## Project settings: `.yad.yaml`
+
+Put a `.yad.yaml` in the repository (root or any folder) so everyone compares
+and formats manifests the same way. YAD and `yad-cli` look for it next to the
+compared files and in the folders above, up to the repository root; its
+settings take precedence over personal ones (the footer shows ⚑ `.yad.yaml`
+when it is used). Every key is optional:
+
+```yaml
+ignore:                  # paths ignored in addition to the usual ones
+  - metadata.labels.team
+  - spec.replicas
+defaultIgnore: true      # false: also compare status, managedFields, uid…
+emptyEqualsMissing: true # {} and [] are the same as a missing key
+crossNamespace: true     # pair stage/api with prod/api
+decodeSecrets: true
+format:
+  indent: 2              # 2 or 4
+  indentLists: true      # false: "key:\n- item"
+  sortKubernetesKeys: true
+```
+
+`yad-cli` fails (exit 2) on a mistake in `.yad.yaml`; `--no-config` skips the
+file, and explicit flags win over it.
+
 ## Shortcuts
 
 | Key | Action |

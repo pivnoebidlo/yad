@@ -147,3 +147,24 @@ describe("yad-cli and Secrets", () => {
     expect(git.out).toContain("(hidden)");
   });
 });
+
+describe("yad-cli and .yad.yaml", () => {
+  it("uses the project's settings, stops at the repository root, and lets flags win", () => {
+    const d = tree({
+      ".git/HEAD": "ref: refs/heads/main\n",
+      ".yad.yaml": "ignore:\n  - spec.replicas\nformat:\n  indent: 4\n",
+      "envs/l.yaml": dep(2),
+      "envs/r.yaml": dep(6),
+      "fmt/a.yaml": "a:\n  b: 1\n",
+    });
+    const l = join(d, "envs/l.yaml"), r = join(d, "envs/r.yaml");
+    expect(run("diff", l, r).code).toBe(0);
+    expect(run("diff", "--no-config", l, r).code).toBe(1);
+    expect(run("format", join(d, "fmt")).code).toBe(1); // 4 spaces wanted
+    expect(run("format", "--indent", "2", join(d, "fmt")).code).toBe(0);
+    writeFileSync(join(d, ".yad.yaml"), "ignor: [spec.replicas]\n");
+    const bad = run("diff", l, r);
+    expect(bad.code).toBe(2);
+    expect(bad.err).toContain("ignor: unknown setting");
+  });
+});
