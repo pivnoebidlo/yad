@@ -99,4 +99,6 @@ export interface CompareOptions {
    * k8s `omitempty`: `annotations: {}` equals no annotations.
    */
   emptyEqualsMissing: boolean;
+  /** Pair the same group/kind/name across namespaces when unambiguous (stage vs prod overlays). */
+  crossNamespace: boolean;
 }

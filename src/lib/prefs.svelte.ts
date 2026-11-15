@@ -16,6 +16,7 @@ export interface Settings {
   /** Ignore patterns, one per entry, in formatPath syntax. */
   ignorePaths: string[];
   emptyEqualsMissing: boolean;
+  crossNamespace: boolean;
   /** Formatting ("Format" button). */
   formatIndent: number;
   formatIndentSeq: boolean;
@@ -34,6 +35,7 @@ export const defaultSettings = (): Settings => ({
   ignoreNoise: true,
   ignorePaths: defaultIgnorePaths(),
   emptyEqualsMissing: true,
+  crossNamespace: true,
   formatIndent: 2,
   formatIndentSeq: true,
   formatSortK8s: true,
@@ -88,6 +90,7 @@ export function compareOptions(): CompareOptions {
     mergeKeys: { ...DEFAULT_MERGE_KEYS },
     fallbackMergeKeys: ["name"],
     emptyEqualsMissing: settings.emptyEqualsMissing,
+    crossNamespace: settings.crossNamespace,
   };
 }
 

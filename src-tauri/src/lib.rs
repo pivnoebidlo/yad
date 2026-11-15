@@ -86,6 +86,110 @@ fn list_files(root: String) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
+// ---- rendering Kustomize overlays and Helm charts ----------------------------
+
+/// "kustomize" or "helm" when `dir` is such a project.
+#[tauri::command]
+fn project_kind(dir: String) -> Option<&'static str> {
+    let d = Path::new(&dir);
+    if ["kustomization.yaml", "kustomization.yml", "Kustomization"].iter().any(|f| d.join(f).is_file()) {
+        Some("kustomize")
+    } else if d.join("Chart.yaml").is_file() {
+        Some("helm")
+    } else {
+        None
+    }
+}
+
+/// A tool from PATH or the usual install locations: apps started from the
+/// Finder get a minimal PATH without Homebrew.
+fn find_tool(name: &str) -> Option<PathBuf> {
+    let exe = if cfg!(windows) { format!("{name}.exe") } else { name.to_string() };
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    for d in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/snap/bin", "/home/linuxbrew/.linuxbrew/bin"] {
+        dirs.push(PathBuf::from(d));
+    }
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+        let home = PathBuf::from(home);
+        dirs.extend([home.join(".local/bin"), home.join("bin"), home.join("go/bin")]);
+    }
+    dirs.into_iter().map(|d| d.join(&exe)).find(|p| p.is_file())
+}
+
+/// Release name for `helm template`: the chart's own name, so two copies of a
+/// chart (stage/prod) render with the same resource names.
+fn chart_name(dir: &Path) -> String {
+    std::fs::read_to_string(dir.join("Chart.yaml"))
+        .ok()
+        .and_then(|t| {
+            t.lines()
+                .find_map(|l| l.strip_prefix("name:"))
+                .map(|v| v.trim().trim_matches(|c| c == '"' || c == '\'').to_string())
+        })
+        .filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+        .unwrap_or_else(|| "release".into())
+}
+
+fn run_render(tool: &str, dir: &str, values: &[String]) -> Result<String, String> {
+    let mut cmd = match tool {
+        "kustomize" => {
+            if let Some(k) = find_tool("kustomize") {
+                let mut c = std::process::Command::new(k);
+                c.arg("build").arg(dir);
+                c
+            } else if let Some(k) = find_tool("kubectl") {
+                let mut c = std::process::Command::new(k);
+                c.arg("kustomize").arg(dir);
+                c
+            } else {
+                return Err("kustomize not found (neither kustomize nor kubectl is installed)".into());
+            }
+        }
+        "helm" => {
+            let h = find_tool("helm").ok_or("helm not found")?;
+            let mut c = std::process::Command::new(h);
+            c.arg("template").arg(chart_name(Path::new(dir))).arg(dir);
+            for v in values {
+                c.arg("-f").arg(v);
+            }
+            c
+        }
+        _ => return Err(format!("unknown tool {tool}")),
+    };
+    let out = cmd.current_dir(dir).output().map_err(|e| format!("{tool}: {e}"))?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        let err = String::from_utf8_lossy(&out.stderr);
+        Err(format!("{tool}: {}", err.trim()))
+    }
+}
+
+/// Output of `kustomize build <dir>` or `helm template <chart> <dir> -f …`.
+#[tauri::command]
+async fn render(tool: String, dir: String, values: Vec<String>) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || run_render(&tool, &dir, &values))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chart_name_from_chart_yaml() {
+        let d = std::env::temp_dir().join(format!("yad-chart-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("Chart.yaml"), "apiVersion: v2\nname: \"shop-api\"\nversion: 1.0.0\n").unwrap();
+        assert_eq!(chart_name(&d), "shop-api");
+        assert_eq!(project_kind(d.to_string_lossy().into()), Some("helm"));
+        std::fs::write(d.join("Chart.yaml"), "name: Bad Name\n").unwrap();
+        assert_eq!(chart_name(&d), "release");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+}
+
 /// Paths passed on the command line (`yad left.yaml right.yaml`),
 /// resolved to absolute paths. Flags (starting with `-`) are ignored,
 /// which also skips macOS `-psn_*` launch arguments.
@@ -109,7 +213,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![read_text, write_text, path_kind, list_files, file_stamps, initial_paths])
+        .invoke_handler(tauri::generate_handler![read_text, write_text, path_kind, list_files, file_stamps, project_kind, render, initial_paths])
         .run(tauri::generate_context!())
         .expect("error while running yad");
 }

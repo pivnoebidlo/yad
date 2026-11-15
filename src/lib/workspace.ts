@@ -13,6 +13,8 @@ export interface Buf {
   exists: boolean;
   eol: "\n" | "\r\n";
   bom: boolean;
+  /** Generated text (rendered Kustomize/Helm output): shown, never edited or saved. */
+  readonly?: boolean;
   /** Disk fingerprint when the file was last read or written (see fileStamps). */
   stamp?: string | null;
 }

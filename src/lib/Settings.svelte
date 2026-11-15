@@ -133,6 +133,8 @@
         <div><button onclick={resetIgnore}>{t("resetDefaults")}</button></div>
         <label class="check top"><input type="checkbox" bind:checked={settings.emptyEqualsMissing} /> {t("emptyEqualsMissing")}</label>
         <p class="hint">{t("emptyEqualsMissingHint")}</p>
+        <label class="check top"><input type="checkbox" bind:checked={settings.crossNamespace} /> {t("crossNamespace")}</label>
+        <p class="hint">{t("crossNamespaceHint")}</p>
       {:else if tab === "formatting"}
         <p class="hint">{t("formatHint")}</p>
         <label class="field">

@@ -97,9 +97,9 @@ describe("compareTexts", () => {
     ]);
   });
 
-  it("treats same name in different namespaces as different resources", () => {
+  it("treats same name in different namespaces as different resources when crossNamespace is off", () => {
     const cm = (ns: string) => `apiVersion: v1\nkind: ConfigMap\nmetadata: {name: c, namespace: ${ns}}\n`;
-    expect(summary(compareTexts(cm("a"), cm("b")))).toEqual(["ConfigMap a/c: removed", "ConfigMap b/c: added"]);
+    expect(summary(compareTexts(cm("a"), cm("b"), { crossNamespace: false }))).toEqual(["ConfigMap a/c: removed", "ConfigMap b/c: added"]);
   });
 
   it("compares a git manifest with kubectl live output, hiding server noise", () => {
@@ -241,5 +241,24 @@ describe("parsePath", () => {
   });
   it("rejects malformed input", () => {
     for (const bad of ["", ".a", "a..b", 'a["x]', "a[1]"]) expect(parsePath(bad)).toBeNull();
+  });
+});
+
+describe("matching across namespaces", () => {
+  const dep = (ns: string, replicas: number) => `apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\n  namespace: ${ns}\nspec:\n  replicas: ${replicas}\n`;
+  it("pairs the same resource in different namespaces when unambiguous", () => {
+    const r = compareTexts(dep("shop-stage", 1), dep("shop-prod", 6));
+    expect(r.resources).toHaveLength(1);
+    expect(r.resources[0].changes.map((c) => formatPath(c.path)).sort()).toEqual(["metadata.namespace", "spec.replicas"]);
+  });
+  it("does not guess when several namespaces have it", () => {
+    const r = compareTexts(`${dep("a", 1)}---\n${dep("b", 1)}`, dep("c", 1));
+    expect(r.resources.filter((x) => x.a && x.b)).toHaveLength(0);
+  });
+  it("still prefers the exact namespace", () => {
+    const r = compareTexts(`${dep("a", 1)}---\n${dep("b", 2)}`, dep("b", 3));
+    const paired = r.resources.filter((x) => x.a && x.b);
+    expect(paired).toHaveLength(1);
+    expect(paired[0].changes.map((c) => formatPath(c.path))).toEqual(["spec.replicas"]);
   });
 });

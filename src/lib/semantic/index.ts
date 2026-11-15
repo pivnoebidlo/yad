@@ -27,7 +27,7 @@ export function compareTexts(a: string, b: string, options: Partial<CompareOptio
   const pa = parseResources(a);
   const pb = parseResources(b);
 
-  const resources: ResourceDiff[] = matchResources(pa.resources, pb.resources).map(([ra, rb]) => {
+  const resources: ResourceDiff[] = matchResources(pa.resources, pb.resources, opts.crossNamespace).map(([ra, rb]) => {
     const r = (ra ?? rb)!;
     if (!ra) return { key: r.key, label: r.label, status: "added", b: rb, changes: [] };
     if (!rb) return { key: r.key, label: r.label, status: "removed", a: ra, changes: [] };
