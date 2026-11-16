@@ -19,8 +19,13 @@
     readonly?: boolean;
     /** Show →/← buttons between the editors for every chunk. */
     arrows?: boolean;
-    /** Custom handler for an arrow; without it the chunk text is copied. */
-    onarrow?: (chunk: Chunk, dir: Direction) => void;
+    /** Custom handler for an arrow; without it the chunk text is copied. `part`: see `subArrows`. */
+    onarrow?: (chunk: Chunk, dir: Direction, part: number) => void;
+    /**
+     * Extra arrows inside a chunk (parts 1…n; the chunk's own arrow is part 0),
+     * at a line relative to the chunk start on one side.
+     */
+    subArrows?: (chunk: Chunk) => { side: Side; line: number }[];
     onchange?: (side: Side, text: string) => void;
     /** The user (not the program) changed a document: typing, paste, undo… */
     onuseredit?: (side: Side) => void;
@@ -31,7 +36,7 @@
     onmarker?: (id: number) => void;
   }
   let {
-    theme, collapse, readonly = false, arrows = true, onarrow, onchange, onuseredit, ontx, onchunks,
+    theme, collapse, readonly = false, arrows = true, onarrow, subArrows, onchange, onuseredit, ontx, onchunks,
     markers = [], onmarker,
   }: Props = $props();
 
@@ -49,7 +54,9 @@
   }
 
   // Word-level highlighting is noise when most of the text differs
-  // (e.g. a reordered file): then only line backgrounds are shown.
+  // (e.g. a reordered file): then only line backgrounds are shown. Hidden
+  // with a class: switching `highlightChanges` at runtime breaks rendering
+  // in @codemirror/view >= 6.39 (blank editor, "Cannot destructure property 'tile'").
   let inline = true;
   function updateInline() {
     if (!mv) return;
@@ -61,7 +68,7 @@
     const want = changedLines <= Math.max(a.lines, b.lines) / 2;
     if (want !== inline) {
       inline = want;
-      mv.reconfigure({ highlightChanges: want });
+      host.classList.toggle("no-inline", !want);
     }
   }
 
@@ -75,6 +82,7 @@
   function renderArrows(): HTMLElement {
     const el = document.createElement("div");
     el.className = "yad-arrows";
+    el.dataset.part = "0";
     for (const [dir, label, title] of [
       ["a-to-b", "→", t("replaceRight")],
       ["b-to-a", "←", t("replaceLeft")],
@@ -109,7 +117,8 @@
     const chunk = mv.chunks[Number(holder.dataset.chunk)];
     if (!chunk) return;
     const dir = btn.dataset.dir as Direction;
-    if (onarrow) onarrow(chunk, dir);
+    const part = Number(btn.closest<HTMLElement>("[data-part]")?.dataset.part ?? 0);
+    if (onarrow) onarrow(chunk, dir, part);
     else copyChunk(chunk, dir);
   }
 
@@ -158,7 +167,34 @@
       });
       nodes.push(b);
     }
+    // A ✕ takes the place of the arrows on its line.
+    const covered = (top: number) => [...used].some((u) => Math.abs(u - top) < 4);
+    for (const el of col.querySelectorAll<HTMLElement>(":scope > .yad-arrows"))
+      el.classList.toggle("yad-covered", covered(parseFloat(el.style.top)));
+    if (arrows && subArrows) nodes.push(...renderSubArrows().filter((el) => !covered(parseFloat(el.style.top))));
     overlay.replaceChildren(...nodes);
+  }
+
+  /** Arrows for the extra parts of the chunks in view. */
+  function renderSubArrows(): HTMLElement[] {
+    const out: HTMLElement[] = [];
+    const vpA = mv!.a.viewport, vpB = mv!.b.viewport;
+    mv!.chunks.forEach((chunk, i) => {
+      if ((chunk.toA < vpA.from || chunk.fromA > vpA.to) && (chunk.toB < vpB.from || chunk.fromB > vpB.to)) return;
+      subArrows!(chunk).forEach(({ side, line }, k) => {
+        const v = view(side);
+        const doc = v.state.doc;
+        const first = doc.lineAt(Math.min(side === "a" ? chunk.fromA : chunk.fromB, doc.length)).number;
+        const pos = doc.line(Math.min(first + line, doc.lines)).from;
+        const el = renderArrows();
+        el.classList.add("yad-subarrows");
+        el.dataset.chunk = String(i);
+        el.dataset.part = String(k + 1);
+        el.style.top = Math.round(v.lineBlockAt(pos).top) + "px";
+        out.push(el);
+      });
+    });
+    return out;
   }
 
   $effect(() => {
@@ -193,7 +229,15 @@
     overlay = document.createElement("div");
     overlay.className = "yad-markers";
     mv.dom.querySelector(".cm-mergeViewEditors")?.appendChild(overlay);
-    return () => mv?.destroy();
+    // The merge view adds and moves its arrows on its own schedule: re-check
+    // which of them a ✕ covers.
+    const col = mv.dom.querySelector(".cm-merge-revert");
+    const obs = new MutationObserver(queueRender);
+    if (col) obs.observe(col, { childList: true, subtree: true, attributeFilter: ["style"] });
+    return () => {
+      obs.disconnect();
+      mv?.destroy();
+    };
   });
 
   $effect(() => {
@@ -304,6 +348,10 @@
     min-height: 0;
     overflow: hidden;
   }
+  .diff:global(.no-inline) :global(.cm-changedText) {
+    background: none !important;
+    color: inherit !important;
+  }
   .diff :global(.cm-mergeView) {
     height: 100%;
   }
@@ -324,7 +372,7 @@
   }
   .diff :global(.yad-undo) {
     position: absolute;
-    right: 3px;
+    left: 15px; /* centered where the arrows are */
     width: 18px;
     height: 18px;
     padding: 0;
@@ -341,7 +389,7 @@
     color: white;
   }
   .diff :global(.cm-merge-revert) {
-    width: 66px;
+    width: 48px;
     background: var(--panel);
     border-left: 1px solid var(--border);
     border-right: 1px solid var(--border);
@@ -352,7 +400,20 @@
     display: flex;
     gap: 2px;
   }
-  .diff :global(.cm-merge-revert .yad-arrows button) {
+  .diff :global(.yad-subarrows) {
+    pointer-events: auto;
+  }
+  .diff :global(.yad-covered) {
+    visibility: hidden;
+  }
+  .diff :global(.yad-subarrows button) {
+    text-align: center;
+    background: none;
+    border: none;
+    cursor: pointer;
+  }
+  .diff :global(.cm-merge-revert .yad-arrows button),
+  .diff :global(.yad-subarrows button) {
     position: static;
     width: 20px;
     height: 18px;
@@ -362,7 +423,8 @@
     color: var(--muted);
     font-size: 13px;
   }
-  .diff :global(.cm-merge-revert .yad-arrows button:hover) {
+  .diff :global(.cm-merge-revert .yad-arrows button:hover),
+  .diff :global(.yad-subarrows button:hover) {
     background: var(--accent);
     color: white;
   }
