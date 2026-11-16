@@ -66,3 +66,13 @@ export function lineOf(starts: number[], pos: number): number {
   }
   return lo;
 }
+
+/**
+ * Copy a chunk's lines from `src` over the matching lines of `dst` (offsets
+ * as in a merge view chunk: `to` may point one past the end of the text).
+ */
+export function copyChunkText(src: string, srcFrom: number, srcTo: number, dst: string, dstFrom: number, dstTo: number): string {
+  let insert = src.slice(srcFrom, Math.max(srcFrom, srcTo - 1));
+  if (srcFrom !== srcTo && dstTo <= dst.length) insert += "\n";
+  return dst.slice(0, dstFrom) + insert + dst.slice(Math.min(dst.length, dstTo));
+}

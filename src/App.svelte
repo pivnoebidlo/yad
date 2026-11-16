@@ -6,7 +6,7 @@
   import type { Chunk } from "@codemirror/merge";
   import type { ChangeDesc } from "@codemirror/state";
   import DiffView from "./lib/DiffView.svelte";
-  import { lineOf, lineStarts, splitChunk, type Part, type PartItem } from "./lib/chunkParts";
+  import { copyChunkText, lineOf, lineStarts, splitChunk, type Part, type PartItem } from "./lib/chunkParts";
   import ResourceList from "./lib/ResourceList.svelte";
   import FileList from "./lib/FileList.svelte";
   import HistoryList from "./lib/HistoryList.svelte";
@@ -31,7 +31,7 @@
   } from "./lib/workspace";
   import {
     alignOrder, applyEdits, compareTexts, formatText, isJsonText, KIND_LABELS, formatPath, pathOn, locatePath, planApply, planRevert, planSemanticEdit, renderNormalized, shortPath, merge3, resolveConflict,
-    type ApplyItem, type Change, type CompareResult, type Direction, type NormalizedView,
+    type ApplyItem, type Change, type CompareResult, type Direction, type NormalizedView, isMultiline,
     type ResourceDiff, type SourceRange, type Touched, type MergeConflict,
   } from "./lib/semantic";
 
@@ -918,6 +918,17 @@
   }
 
   /** Where to draw each undoable apply's ✕ in the text or semantic view. */
+  /** Start of the line `n` lines below `pos`, not past `max`. */
+  function linesDown(text: string, pos: number, n: number, max: number): number {
+    let p = pos;
+    for (let i = 0; i < n; i++) {
+      const nl = text.indexOf("\n", p);
+      if (nl < 0 || nl + 1 > max) break;
+      p = nl + 1;
+    }
+    return p;
+  }
+
   function markersFor(view: Mode): Marker[] {
     const e = entries[current];
     if (!e) return [];
@@ -929,11 +940,16 @@
       if (t) {
         const r = result?.resources.find((x) => x.key === t.key || x.a?.key === t.key || x.b?.key === t.key);
         if (!r) continue;
-        if (view === "semantic") pos = normalized?.locate(op.side, r.key, t.path)?.from;
-        else {
+        let span: SourceRange | undefined, text = "";
+        if (view === "semantic") {
+          span = normalized?.locate(op.side, r.key, t.path);
+          text = normalized?.[op.side] ?? "";
+        } else {
           const tr = r[op.side];
-          pos = tr ? locatePath(tr.node, t.path ?? [], tr.ctx)?.from : undefined;
+          span = tr ? locatePath(tr.node, t.path ?? [], tr.ctx) : undefined;
+          text = tr?.ctx.text ?? "";
         }
+        pos = span && (op.lineInValue ? linesDown(text, span.from, op.lineInValue, span.to) : span.from);
       } else if (view === "text") pos = op.anchor;
       if (pos !== undefined) out.push({ id: op.id, side: op.side, pos, title: op.label });
     }
@@ -1022,9 +1038,56 @@
   }
 
   /** Arrow in the semantic view: apply the changes of that part of the chunk. */
-  function onSemanticArrow(chunk: Chunk, dir: Direction, part: number) {
-    const items = semanticParts(chunk)[part]?.items;
-    if (items?.length) apply(items, dir);
+  async function onSemanticArrow(chunk: Chunk, dir: Direction, part: number) {
+    const parts = semanticParts(chunk);
+    const items = parts[part]?.items;
+    if (!items?.length) return;
+    if (parts.length === 1 && items.length === 1 && (await applyLines(chunk, dir, items[0]))) return;
+    apply(items, dir);
+  }
+
+  /**
+   * A chunk inside one multi-line string (e.g. a config under `key: |`):
+   * copy just its lines, not the whole value. Done like an edit of the
+   * normalized text, which is carried over to the source file.
+   * Returns false when the chunk is not like that (apply the whole change then).
+   */
+  async function applyLines(chunk: Chunk, dir: Direction, { resource: r, change: c }: ApplyItem): Promise<boolean> {
+    if (!normalized || !semLines || !c || !r.a || !r.b || timer || semTimer) return false;
+    if (c.kind !== "changed" || typeof c.a !== "string" || typeof c.b !== "string" || !(isMultiline(c.a) || isMultiline(c.b))) return false;
+    // Strictly below the key line, within the value, on both sides.
+    const inside = (side: Side, from: number, to: number) => {
+      const span = normalized!.locate(side, r.key, pathOn(c, side));
+      if (!span) return false;
+      const keyLineEnd = normalized![side].indexOf("\n", span.from);
+      return keyLineEnd >= 0 && from > keyLineEnd && lineOf(semLines![side], Math.max(from, to - 1)) <= lineOf(semLines![side], span.to);
+    };
+    if (!inside("a", chunk.fromA, chunk.toA) || !inside("b", chunk.fromB, chunk.toB)) return false;
+
+    const target: Side = dir === "a-to-b" ? "b" : "a";
+    if (await refuseRendered(target)) return true;
+    const oldNorm = normalized[target];
+    const newNorm = dir === "a-to-b"
+      ? copyChunkText(normalized.a, chunk.fromA, chunk.toA, oldNorm, chunk.fromB, chunk.toB)
+      : copyChunkText(normalized.b, chunk.fromB, chunk.toB, oldNorm, chunk.fromA, chunk.toA);
+    const before = raw.getDoc(target);
+    const span = normalized.locate(target, r.key, pathOn(c, target))!;
+    const lineInValue = lineOf(semLines[target], target === "a" ? chunk.fromA : chunk.fromB) - lineOf(semLines[target], span.from);
+    const plan = planSemanticEdit(normalized.encode(target, oldNorm), normalized.encode(target, newNorm), before, opts);
+    if (plan.parseError || plan.errors.length || !plan.edits.length) return false;
+    raw.applyEdits(target, plan.edits);
+    const after = raw.getDoc(target);
+    if (after !== before) {
+      const res = r[target]!;
+      record({
+        rel: entries[current]?.rel ?? "", side: target, before, after,
+        label: `${dir === "a-to-b" ? "→" : "←"} ${shortPath(c.path)} (${t("someLines")})`,
+        touched: [{ key: res.key, path: pathOn(c, target) }],
+        lineInValue,
+      });
+    }
+    recompute();
+    return true;
   }
 
   const semSubArrows = (chunk: Chunk) => semanticParts(chunk).slice(1).map(({ side, line }) => ({ side, line }));
