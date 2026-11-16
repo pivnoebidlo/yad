@@ -6,6 +6,7 @@
   import type { Chunk } from "@codemirror/merge";
   import type { ChangeDesc } from "@codemirror/state";
   import DiffView from "./lib/DiffView.svelte";
+  import { lineOf, lineStarts, splitChunk, type Part, type PartItem } from "./lib/chunkParts";
   import ResourceList from "./lib/ResourceList.svelte";
   import FileList from "./lib/FileList.svelte";
   import HistoryList from "./lib/HistoryList.svelte";
@@ -978,27 +979,55 @@
     recompute();
   }
 
-  /** Arrow in the semantic view: apply the changes inside that chunk. */
-  function onSemanticArrow(chunk: Chunk, dir: Direction) {
-    if (!result || !normalized) return;
-    const hit = (s: SourceRange | undefined, from: number, to: number) => !!s && to > from && s.from < to && s.to > from;
-    const items: ApplyItem[] = [];
+  /** Every semantic change with its place in the normalized texts (for the arrows). */
+  const semItems = $derived.by(() => {
+    const out: { item: ApplyItem; group: string; a?: SourceRange; b?: SourceRange }[] = [];
+    if (!result || !normalized) return out;
     for (const r of result.resources) {
       if (r.status === "equal") continue;
       if (!r.a || !r.b) {
         const side: Side = r.a ? "a" : "b";
-        const span = normalized.locate(side, r.key);
-        if (side === "a" ? hit(span, chunk.fromA, chunk.toA) : hit(span, chunk.fromB, chunk.toB)) items.push({ resource: r });
+        out.push({ item: { resource: r }, group: r.key, [side]: normalized.locate(side, r.key) });
         continue;
       }
-      for (const c of r.changes) {
-        const inA = c.kind !== "added" && hit(normalized.locate("a", r.key, pathOn(c, "a")), chunk.fromA, chunk.toA);
-        const inB = c.kind !== "removed" && hit(normalized.locate("b", r.key, pathOn(c, "b")), chunk.fromB, chunk.toB);
-        if (inA || inB) items.push({ resource: r, change: c });
-      }
+      for (const c of r.changes)
+        out.push({
+          item: { resource: r, change: c },
+          group: `${r.key}|${formatPath(c.path.slice(0, -1))}`,
+          a: c.kind !== "added" ? normalized.locate("a", r.key, pathOn(c, "a")) : undefined,
+          b: c.kind !== "removed" ? normalized.locate("b", r.key, pathOn(c, "b")) : undefined,
+        });
     }
-    apply(items, dir);
+    return out;
+  });
+  const semLines = $derived(normalized && { a: lineStarts(normalized.a), b: lineStarts(normalized.b) });
+
+  /** The changes inside a chunk of the semantic view, split into parts with an arrow each. */
+  function semanticParts(chunk: Chunk): Part<ApplyItem>[] {
+    if (!semLines) return [];
+    const hit = (s: SourceRange | undefined, from: number, to: number) => !!s && to > from && s.from < to && s.to > from;
+    const rel = (side: Side, pos: number, start: number) => Math.max(0, lineOf(semLines[side], pos) - lineOf(semLines[side], start));
+    const list: PartItem<ApplyItem>[] = [];
+    for (const it of semItems) {
+      const inA = hit(it.a, chunk.fromA, chunk.toA), inB = hit(it.b, chunk.fromB, chunk.toB);
+      if (!inA && !inB) continue;
+      list.push({
+        item: it.item,
+        group: it.group,
+        a: inA ? rel("a", it.a!.from, chunk.fromA) : undefined,
+        b: inB ? rel("b", it.b!.from, chunk.fromB) : undefined,
+      });
+    }
+    return splitChunk(list);
   }
+
+  /** Arrow in the semantic view: apply the changes of that part of the chunk. */
+  function onSemanticArrow(chunk: Chunk, dir: Direction, part: number) {
+    const items = semanticParts(chunk)[part]?.items;
+    if (items?.length) apply(items, dir);
+  }
+
+  const semSubArrows = (chunk: Chunk) => semanticParts(chunk).slice(1).map(({ side, line }) => ({ side, line }));
 
   // ---- navigation ---------------------------------------------------------
 
@@ -1319,7 +1348,7 @@
             onchunks={(n) => (chunks = n)} markers={rawMarkers} {onmarker} />
         </div>
         <div class="view" class:hidden={mode !== "semantic"}>
-          <DiffView bind:this={sem} {theme} {collapse} onarrow={onSemanticArrow} onuseredit={onSemanticUserEdit}
+          <DiffView bind:this={sem} {theme} {collapse} onarrow={onSemanticArrow} subArrows={semSubArrows} onuseredit={onSemanticUserEdit}
             markers={semMarkers} {onmarker} />
         </div>
       </div>
