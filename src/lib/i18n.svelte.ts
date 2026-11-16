@@ -77,6 +77,7 @@ const en = {
   left: "left",
   right: "right",
   textBlock: "text block",
+  someLines: "lines",
   nChangesIn: "{n} changes in {names}",
   // dialogs & messages
   unsavedTitle: "Unsaved changes",
@@ -316,6 +317,7 @@ const ru: Dict = {
   left: "слева",
   right: "справа",
   textBlock: "текстовый блок",
+  someLines: "строки",
   nChangesIn: "{n} изм. в {names}",
   unsavedTitle: "Несохранённые изменения",
   discardSide: "Отбросить несохранённые изменения {side}?",

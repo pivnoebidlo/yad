@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { lineOf, lineStarts, splitChunk } from "./chunkParts";
+import { copyChunkText, lineOf, lineStarts, splitChunk } from "./chunkParts";
 
 describe("splitChunk", () => {
   it("keeps sibling changes together and separates an unrelated one", () => {
@@ -40,5 +40,19 @@ describe("lineOf", () => {
   it("finds 0-based lines", () => {
     const s = lineStarts("ab\ncd\n\nef");
     expect([0, 2, 3, 5, 6, 7, 9].map((p) => lineOf(s, p))).toEqual([0, 0, 1, 1, 2, 3, 3]);
+  });
+});
+
+describe("copyChunkText", () => {
+  // Chunks cover whole lines; `to` is just past the last line's newline.
+  it("replaces changed lines", () => {
+    const a = "x\nold1\nold2\ny\n", b = "x\nnew\ny\n";
+    expect(copyChunkText(b, 2, 6, a, 2, 12)).toBe(b);
+  });
+  it("deletes lines when the source side is empty", () => {
+    expect(copyChunkText("x\ny\n", 2, 2, "x\nz\ny\n", 2, 4)).toBe("x\ny\n");
+  });
+  it("inserts lines when the target side is empty", () => {
+    expect(copyChunkText("x\nz\ny\n", 2, 4, "x\ny\n", 2, 2)).toBe("x\nz\ny\n");
   });
 });

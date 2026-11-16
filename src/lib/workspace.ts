@@ -66,6 +66,8 @@ export interface Op {
   touched?: Touched[];
   /** Text copies: where the copied block starts in the target, kept up to date. */
   anchor?: number;
+  /** Lines copied inside a multi-line value: their first line, counted from the key's line. */
+  lineInValue?: number;
 }
 
 /** An "undo" button shown in the arrow column at the line of `pos` on `side`. */
