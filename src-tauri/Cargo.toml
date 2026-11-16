@@ -1,6 +1,6 @@
 [package]
 name = "yad"
-version = "0.7.1"
+version = "0.7.2"
 description = "Semantic YAML/JSON diff for Kubernetes manifests"
 edition = "2021"
 
