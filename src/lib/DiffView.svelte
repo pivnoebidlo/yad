@@ -19,6 +19,11 @@
     readonly?: boolean;
     /** Show →/← buttons between the editors for every chunk. */
     arrows?: boolean;
+    /**
+     * A document with nothing to compare: only the left editor is shown, full
+     * width (the right one stays mounted, so its state is not lost).
+     */
+    single?: boolean;
     /** Custom handler for an arrow; without it the chunk text is copied. `part`: see `subArrows`. */
     onarrow?: (chunk: Chunk, dir: Direction, part: number) => void;
     /**
@@ -36,7 +41,7 @@
     onmarker?: (id: number) => void;
   }
   let {
-    theme, collapse, readonly = false, arrows = true, onarrow, subArrows, onchange, onuseredit, ontx, onchunks,
+    theme, collapse, readonly = false, arrows = true, single = false, onarrow, subArrows, onchange, onuseredit, ontx, onchunks,
     markers = [], onmarker,
   }: Props = $props();
 
@@ -74,7 +79,6 @@
 
   function changed(side: Side) {
     if (!mv) return;
-    onchange?.(side, view(side).state.doc.toString());
     onchunks?.(mv.chunks.length);
     updateInline();
   }
@@ -207,10 +211,17 @@
       comp[side].ro.of([]),
       baseSetup({
         ...comp[side], lang: "plain", theme0: theme, readonly,
-        onChange: () => changed(side),
         onUpdate: (u) => {
-          if (u.docChanged) ontx?.(side, u.changes);
-          if (u.docChanged && u.transactions.some((tr) => tr.annotation(Transaction.userEvent) !== undefined)) onuseredit?.(side);
+          if (u.docChanged) {
+            ontx?.(side, u.changes);
+            // `onchange` is for user input only: programmatic changes (file
+            // switches, reloads, mirroring) update the buffers themselves.
+            if (u.transactions.some((tr) => tr.annotation(Transaction.userEvent) !== undefined)) {
+              onuseredit?.(side);
+              onchange?.(side, view(side).state.doc.toString());
+            }
+            changed(side);
+          }
           if (u.docChanged || u.geometryChanged || u.viewportChanged) queueRender();
         },
       }),
@@ -250,6 +261,14 @@
   $effect(() => {
     const conf = { collapseUnchanged: collapseConf(collapse) };
     mv?.reconfigure(conf);
+  });
+
+  // A document alone: the second editor and the arrow column stay mounted (their
+  // state is kept), only out of sight; the visible one takes the full width.
+  $effect(() => {
+    if (!mv) return;
+    mv.dom.classList.toggle("yad-single", single);
+    mv.dom.querySelectorAll<HTMLElement>(".cm-mergeViewEditor")[1]?.classList.toggle("yad-single-off", single);
   });
 
   /**
@@ -315,6 +334,11 @@
     return null;
   }
 
+  /** Focus one side's editor. */
+  export function focus(side: Side) {
+    view(side).focus();
+  }
+
   export function jump(dir: 1 | -1) {
     const v = view(focusedSide() ?? "b");
     (dir > 0 ? goToNextChunk : goToPreviousChunk)(v);
@@ -363,6 +387,13 @@
   }
   .diff :global(.cm-mergeViewEditors) {
     position: relative;
+  }
+  .diff:global(.yad-single) :global(.cm-merge-revert),
+  .diff:global(.yad-single) :global(.yad-markers) {
+    display: none;
+  }
+  .diff :global(.cm-mergeViewEditor.yad-single-off) {
+    display: none;
   }
   .diff :global(.yad-markers) {
     position: absolute;

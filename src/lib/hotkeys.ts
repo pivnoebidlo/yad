@@ -2,12 +2,15 @@
  * App-level keyboard shortcuts: an action registry, layout-independent
  * matching (by physical key, so they work with any keyboard layout) and
  * display in the platform's style.
+ *
+ * The order of ACTIONS matters: if two actions somehow hold the same combo
+ * (e.g. settings saved before a default changed), the first one wins.
  */
 
 export const ACTIONS = [
   "settings", "save", "saveAll",
   "openFileLeft", "openFileRight", "openFolderLeft", "openFolderRight",
-  "modeSemantic", "modeSource", "showInSource", "toggleSidebar", "filter",
+  "modeSemantic", "modeSource", "showInSource", "toggleSidebar", "format", "filter",
   "newTab", "closeTab", "nextTab", "prevTab",
   "prevDiff", "nextDiff", "prevFile", "nextFile",
 ] as const;
@@ -26,7 +29,8 @@ export const DEFAULT_HOTKEYS: Record<ActionId, string> = {
   modeSource: "Mod+2",
   showInSource: "Mod+J",
   toggleSidebar: "Mod+B",
-  filter: "Mod+Shift+F",
+  format: "Mod+Shift+F",
+  filter: "Mod+Alt+F",
   newTab: "Mod+T",
   closeTab: "Mod+W",
   nextTab: "Mod+Shift+]",

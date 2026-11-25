@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { applyEdits, compareTexts, isJsonText, planApply, type Direction } from "./index";
+import { applyEdits, compareTexts, expandJsonStrings, isJsonText, planApply, type Direction } from "./index";
 
 const fixture = (name: string) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8");
 const allEqual = (a: string, b: string) => compareTexts(a, b).resources.every((r) => r.status === "equal");
@@ -38,5 +38,41 @@ describe("applying changes to JSON", () => {
   it("does not treat YAML flow maps as JSON files", () => {
     expect(isJsonText("{a: 1}")).toBe(false);
     expect(isJsonText("a: 1")).toBe(false);
+  });
+});
+
+describe("expanding JSON embedded in strings", () => {
+  it("turns strings that hold JSON objects or arrays into real values, recursively", () => {
+    const v = expandJsonStrings({
+      request: "{\"obj\":{\"PhoneChange\":false}}",
+      headers: "[\"gzip, deflate, br, zstd\"]",
+      nested: "{\"inner\":\"{\\\"deep\\\":1}\"}",
+      text: "{not json}",
+      num: "42",
+      flag: "true",
+      quoted: "\"hello\"",
+      empty: "{}",
+      nul: "null",
+      spaces: "  {\"a\":1}  ",
+    }) as Record<string, unknown>;
+    expect(v.request).toEqual({ obj: { PhoneChange: false } });
+    expect(v.headers).toEqual(["gzip, deflate, br, zstd"]);
+    expect(v.nested).toEqual({ inner: { deep: 1 } }); // JSON inside JSON inside a string
+    expect(v.text).toBe("{not json}");
+    expect(v.num).toBe("42");
+    expect(v.flag).toBe("true");
+    expect(v.quoted).toBe("\"hello\"");
+    expect(v.empty).toEqual({});
+    expect(v.nul).toBe("null");
+    expect(v.spaces).toEqual({ a: 1 });
+  });
+
+  it("expands inside arrays and nested values, and leaves other types alone", () => {
+    expect(expandJsonStrings({ list: ["{\"a\":1}", "plain"], deep: { x: "[{\"b\":2}]" } })).toEqual({
+      list: [{ a: 1 }, "plain"],
+      deep: { x: [{ b: 2 }] },
+    });
+    expect(expandJsonStrings([1, null, true, "x"])).toEqual([1, null, true, "x"]);
+    expect(expandJsonStrings("not an object")).toBe("not an object");
   });
 });

@@ -9,14 +9,18 @@
  * reordered, and keys of non-Kubernetes documents never move — pipelines
  * keep their meaning.
  *
- * Every result is verified: compared strictly with the original (list order
- * matters, nothing ignored) and all comments must still be there. If not,
- * nothing is changed.
+ * JSON is re-printed by JSON.stringify, and string values that hold a JSON
+ * object or array are expanded into real nested values (a log line becomes
+ * readable); `expandNestedJson: false` keeps them as strings.
+ *
+ * Every YAML result is verified: compared strictly with the original (list
+ * order matters, nothing ignored) and all comments must still be there. If
+ * not, nothing is changed.
  */
 import { Lexer, isMap, isSeq, parseAllDocuments, type Node, type Pair } from "yaml";
 import { KEY_PRIORITY } from "./config";
 import { detectKind } from "./kinds";
-import { isJsonText } from "./json";
+import { expandJsonStrings, isJsonText } from "./json";
 import { compareTexts } from "./index";
 
 export interface FormatOptions {
@@ -26,9 +30,14 @@ export interface FormatOptions {
   indentSeq: boolean;
   /** Put well-known Kubernetes keys first (other keys keep their order). */
   sortKubernetesKeys: boolean;
+  /**
+   * JSON only: string values that hold a JSON object or array become real
+   * nested values. On by default (undefined counts as on).
+   */
+  expandNestedJson?: boolean;
 }
 
-export const defaultFormatOptions = (): FormatOptions => ({ indent: 2, indentSeq: true, sortKubernetesKeys: true });
+export const defaultFormatOptions = (): FormatOptions => ({ indent: 2, indentSeq: true, sortKubernetesKeys: true, expandNestedJson: true });
 
 export type FormatResult = { text: string; error?: undefined } | { text?: undefined; error: string };
 
@@ -69,6 +78,7 @@ export function formatText(text: string, opts: FormatOptions = defaultFormatOpti
 
   if (isJsonText(text)) {
     let v: unknown = JSON.parse(text);
+    if (opts.expandNestedJson !== false) v = expandJsonStrings(v);
     if (opts.sortKubernetesKeys && detectKind(v) === "kubernetes") v = sortJson(v);
     return { text: JSON.stringify(v, null, opts.indent) + "\n" };
   }

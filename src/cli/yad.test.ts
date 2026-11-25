@@ -82,6 +82,21 @@ describe("yad-cli format", () => {
     expect(readFileSync(join(d, "messy.yaml"), "utf8")).toBe("apiVersion: apps/v1\r\nkind: Deployment\r\nmetadata:\r\n  name: x\r\n");
     expect(run("format", d).code).toBe(0);
   });
+
+  it("expands JSON embedded in string values, unless --no-expand-json", () => {
+    const line = JSON.stringify({ code: 403, request: "{\"obj\":{\"PhoneChange\":false}}" }) + "\n";
+    const d = tree({ "log.json": line });
+    expect(run("format", "--write", join(d, "log.json")).code).toBe(0);
+    expect(readFileSync(join(d, "log.json"), "utf8")).toBe(
+      JSON.stringify({ code: 403, request: { obj: { PhoneChange: false } } }, null, 2) + "\n",
+    );
+
+    const d2 = tree({ "log.json": line });
+    expect(run("format", "--no-expand-json", "--write", join(d2, "log.json")).code).toBe(0);
+    expect(readFileSync(join(d2, "log.json"), "utf8")).toBe(
+      JSON.stringify({ code: 403, request: "{\"obj\":{\"PhoneChange\":false}}" }, null, 2) + "\n",
+    );
+  });
 });
 
 describe("yad-cli git-diff", () => {

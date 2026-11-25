@@ -9,7 +9,7 @@ import { pathOn } from "./util";
 export * from "./types";
 export { defaultOptions, DEFAULT_IGNORE, DEFAULT_MERGE_KEYS } from "./config";
 export { formatPath, locatePath, minimalEdit, parsePath, pathOn, shortPath } from "./util";
-export { isJsonText } from "./json";
+export { expandJsonStrings, isJsonText } from "./json";
 export { formatText, defaultFormatOptions, type FormatOptions, type FormatResult } from "./format";
 export { alignOrder, type AlignResult } from "./align";
 export { renderNormalized, normalizeResource, type NormalizedView } from "./normalize";

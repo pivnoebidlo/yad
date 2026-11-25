@@ -1,7 +1,8 @@
 /**
- * Applying changes to a JSON target. Editing JSON text with YAML snippets
- * would break it, so the change is applied to the parsed value and the file
- * is serialized again with its own indentation (JSON has no comments to lose).
+ * JSON-specific helpers: applying changes to a JSON target (editing JSON text
+ * with YAML snippets would break it, so the change is applied to the parsed
+ * value and the file is serialized again with its own indentation — JSON has
+ * no comments to lose) and expanding JSON embedded in string values.
  */
 import type { ApplyItem, ApplyResult, Direction } from "./patch";
 import type { PathSeg, Resource } from "./types";
@@ -17,6 +18,35 @@ export function isJsonText(text: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Guards against pathologically deep nesting (JSON cannot loop, but it can nest). */
+const MAX_EXPAND_DEPTH = 32;
+
+/**
+ * Every string value that holds a JSON object or array becomes the parsed
+ * value, at every level of the tree: logs and configs embed JSON this way
+ * (`"request": "{\"obj\":…}"`), and a diff of one escaped line is useless.
+ * Only containers count — "42" or "true" is usually just text and stays a
+ * string, and so does anything that does not parse.
+ */
+export function expandJsonStrings(v: unknown, depth = 0): unknown {
+  if (typeof v === "string") {
+    const s = v.trim();
+    if (depth < MAX_EXPAND_DEPTH && (s.startsWith("{") || s.startsWith("["))) {
+      try {
+        const parsed = JSON.parse(s) as unknown;
+        if (parsed !== null && typeof parsed === "object") return expandJsonStrings(parsed, depth + 1);
+      } catch {
+        /* looks like JSON but is not: keep the string */
+      }
+    }
+    return v;
+  }
+  if (Array.isArray(v)) return v.map((x) => expandJsonStrings(x, depth));
+  if (v !== null && typeof v === "object")
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, expandJsonStrings(x, depth)]));
+  return v;
 }
 
 /** Indentation used by a JSON text: spaces count, or "\t". */
