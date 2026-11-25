@@ -127,6 +127,10 @@ unsaved edits are not kept) — not when started by git or with paths to
 compare. An empty tab lists recent comparisons. Both can be turned off or
 cleared in Settings → General.
 
+**Favorites** — the star next to Settings in the top bar saves the current
+comparison under a name; the list opens from the star and is also shown on
+the start screen. Only paths are stored, never file contents.
+
 ## Pasting without files
 
 Plain text can be opened with no files behind it: press ⌘V (Ctrl+V) outside

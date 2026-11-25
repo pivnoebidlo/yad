@@ -9,9 +9,12 @@ export type RenderTool = "kustomize" | "helm";
 export type Source = { kind: "file" | "dir" | "render"; path: string; tool?: RenderTool; values?: string[] };
 export type Pair = { a: Source | null; b: Source | null };
 export type Recent = { a: Source; b: Source; at: number };
+/** A comparison saved under a name. Paths only — never file contents. */
+export type Favorite = { name: string; a: Source; b: Source };
 
 const SESSION_KEY = "yad.session";
 const RECENT_KEY = "yad.recent";
+const FAVORITES_KEY = "yad.favorites";
 const MAX_RECENT = 20;
 
 function read<T>(key: string): T | null {
@@ -70,6 +73,26 @@ export function removeRecent(list: Recent[], item: Recent): Recent[] {
 export function clearRecent(): Recent[] {
   write(RECENT_KEY, []);
   return [];
+}
+
+// ---- favorites ---------------------------------------------------------------
+
+export function loadFavorites(): Favorite[] {
+  const v = read<Favorite[]>(FAVORITES_KEY);
+  return Array.isArray(v) ? v.filter((x) => typeof x?.name === "string" && x.name && isSource(x?.a) && isSource(x?.b)) : [];
+}
+
+/** Save a pair as a favorite; saving the same pair again renames the entry. */
+export function addFavorite(list: Favorite[], item: Favorite): Favorite[] {
+  const next = [{ ...item }, ...list.filter((f) => !(sameSource(f.a, item.a) && sameSource(f.b, item.b)))];
+  write(FAVORITES_KEY, next);
+  return next;
+}
+
+export function removeFavorite(list: Favorite[], item: Favorite): Favorite[] {
+  const next = list.filter((f) => f !== item);
+  write(FAVORITES_KEY, next);
+  return next;
 }
 
 const base = (p: string) => p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? p;
