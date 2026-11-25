@@ -294,6 +294,23 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .setup(|app| {
+            // Seamless window: on Windows the frame is drawn by the app itself
+            // (the top bar is the drag region, the window controls are its own
+            // buttons). macOS uses `titleBarStyle: "Overlay"` from the config
+            // (native traffic lights over the content); Linux keeps the native
+            // frame for now.
+            #[cfg(target_os = "windows")]
+            {
+                use tauri::Manager;
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.set_decorations(false);
+                }
+            }
+            #[cfg(not(target_os = "windows"))]
+            let _ = app; // the setup above only exists on Windows
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![read_text, write_text, path_kind, list_files, file_stamps, project_kind, render, initial_paths, merge_args, exit_app, find_config])
         .run(tauri::generate_context!())
         .expect("error while running yad");

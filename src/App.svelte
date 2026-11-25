@@ -22,7 +22,7 @@
   } from "./lib/session";
   import { findUpdate, installUpdate, type Update } from "./lib/updates";
   import { CONFIG_NAME, applyProjectCompare, applyProjectFormat, parseProjectConfig, type ProjectConfig } from "./lib/projectConfig";
-  import { actionFor, comboOf, formatCombo, type ActionId } from "./lib/hotkeys";
+  import { actionFor, comboOf, formatCombo, isMac, type ActionId } from "./lib/hotkeys";
   import {
     readText, writeText, initialPaths, baseName, pathKind, listFiles, fileStamps, joinPath, projectKind, render, mergeArgs, exitApp, findConfig, type RenderTool, type Side,
   } from "./lib/files";
@@ -83,6 +83,14 @@
 
   let mode = $state<Mode>("semantic");
   let sidebar = $state(true);
+  /**
+   * The sidebar's header strip in the top bar: as wide as the panel while it
+   * is open; collapsed — only the traffic-light zone (macOS) and the handle.
+   * The stub is constant: panel tools disappear with the panel.
+   */
+  const headWidth = $derived(sidebar ? Math.max(layout.width, isMac ? 110 : 40) : isMac ? 110 : 40);
+  /** Windows draws its own window controls in the top bar (the frame is off). */
+  const winControls = /Win/.test(navigator.platform);
   let chunks = $state(0);
   let collapse = $state(false);
   let dropTarget = $state<Side | null>(null);
@@ -1406,22 +1414,64 @@
 
 <!-- While Settings is open, the app behind the modal keeps neither focus nor clicks. -->
 <main inert={settingsOpen}>
-  {#if !merge}
-    <nav class="tabs" aria-label={t("tabs")}>
-      {#each tabs as tb, i (tb.id)}
-        {@const live = tabOf(i)}
-        <div class="tab" class:on={i === tabIndex} role="tab" tabindex="-1" aria-selected={i === tabIndex}
-          onmousedown={(e) => { if (e.button === 1) { e.preventDefault(); void closeTab(i); } }}>
-          <button class="tab-name" onclick={() => switchTab(i)}
-            title={[live.sources.a?.path, live.sources.b?.path].filter(Boolean).join("\n") || t("newTab")}>
-            {tabTitle(live)}{tabDirty(live) ? " ✎" : ""}
-          </button>
-          <button class="tab-close" onclick={() => closeTab(i)} title={t("closeTab") + hk("closeTab")}>×</button>
-        </div>
-      {/each}
-      <button class="tab-new" onclick={newTab} title={t("newTab") + hk("newTab")}>+</button>
-    </nav>
-  {/if}
+  <!-- The top bar doubles as the window's title bar. Its left part is the
+       sidebar's own header strip: the traffic lights (macOS) at its left end,
+       the panel's tools at its right end, the handle always on the boundary.
+       Collapsing the panel takes the whole strip with it — only the handle
+       (and the lights zone) remains, so the stub never grows. -->
+  <nav class="tabsbar" aria-label={t("tabs")} data-tauri-drag-region>
+    <div class="head" data-tauri-drag-region style="width: {headWidth}px">
+      <div class="lights-pad" data-tauri-drag-region style="width: {isMac ? 70 : 0}px"></div>
+      <div class="head-drag" data-tauri-drag-region></div>
+      {#if sidebar}
+        <button class="head-gear" onclick={openSettings} title={t("settings") + hk("settings")}>
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+            <circle cx="12" cy="12" r="3" />
+          </svg>
+        </button>
+      {/if}
+      <button class="handle" onclick={() => (sidebar = !sidebar)} title={t("toggleSidebar") + hk("toggleSidebar")}>
+        {#if sidebar}
+          <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2" />
+            <line x1="6" y1="2.75" x2="6" y2="13.25" />
+            <path d="M11.7 6.3 9.9 8l1.8 1.7" />
+          </svg>
+        {:else}
+          <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2" />
+            <line x1="6" y1="2.75" x2="6" y2="13.25" />
+            <path d="M9.5 6.3 11.3 8l-1.8 1.7" />
+          </svg>
+        {/if}
+      </button>
+    </div>
+    {#if !merge}
+      <div class="tabs">
+        {#each tabs as tb, i (tb.id)}
+          {@const live = tabOf(i)}
+          <div class="tab" class:on={i === tabIndex} role="tab" tabindex="-1" aria-selected={i === tabIndex}
+            onmousedown={(e) => { if (e.button === 1) { e.preventDefault(); void closeTab(i); } }}>
+            <button class="tab-name" onclick={() => switchTab(i)}
+              title={[live.sources.a?.path, live.sources.b?.path].filter(Boolean).join("\n") || t("newTab")}>
+              {tabTitle(live)}{tabDirty(live) ? " ✎" : ""}
+            </button>
+            <button class="tab-close" onclick={() => closeTab(i)} title={t("closeTab") + hk("closeTab")}>×</button>
+          </div>
+        {/each}
+        <button class="tab-new" onclick={newTab} title={t("newTab") + hk("newTab")}>+</button>
+      </div>
+    {/if}
+    <span class="drag" data-tauri-drag-region></span>
+    {#if winControls}
+      <div class="wc">
+        <button title={t("winMin")} onclick={() => void getCurrentWindow().minimize()}>—</button>
+        <button title={t("winMax")} onclick={() => void getCurrentWindow().toggleMaximize()}>▢</button>
+        <button class="close" title={t("winClose")} onclick={() => void getCurrentWindow().close()}>✕</button>
+      </div>
+    {/if}
+  </nav>
   <div class="body">
     {#if sidebar}
       {@const c = layout.collapsed}
@@ -1543,7 +1593,6 @@
   </div>
 
   <footer>
-    <button class="toggle" class:on={sidebar} onclick={() => (sidebar = !sidebar)} title={t("toggleSidebar") + hk("toggleSidebar")}>☰</button>
     <div class="segmented" role="tablist">
       <button class:on={mode === "semantic"} onclick={() => setMode("semantic")} title={t("semanticTitle") + hk("modeSemantic")}>{t("semantic")}</button>
       <button class:on={mode === "text"} onclick={() => setMode("text")} title={t("sourceTitle") + hk("modeSource")}>{t("source")}</button>
@@ -1584,7 +1633,6 @@
       <button onclick={saveAll} disabled={!anyDirty()} title={t("saveAllTitle") + hk("saveAll")}>{t("saveAll")}</button>
     {/if}
     <label><input type="checkbox" bind:checked={collapse} /> {t("collapseUnchanged")}</label>
-    <button class="gear" onclick={openSettings} title={t("settings") + hk("settings")}>⚙</button>
   </footer>
 </main>
 
@@ -1594,14 +1642,26 @@
 
 <style>
   main { display: flex; flex-direction: column; height: 100vh; }
-  .tabs { flex: none; display: flex; align-items: stretch; gap: 1px; background: var(--border); border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
+  .tabsbar { flex: none; display: flex; align-items: stretch; height: 40px; background: var(--bg); border-bottom: 1px solid var(--border); }
+  .head { flex: none; display: flex; align-items: stretch; background: var(--panel); border-right: 1px solid var(--border);
+    transition: width .14s ease; overflow: hidden; }
+  .head-drag { flex: 1; min-width: 0; }
+  .head-gear, .handle { all: unset; cursor: default; flex: none; width: 40px; display: flex; align-items: center;
+    justify-content: center; color: var(--muted); }
+  .head-gear:hover, .handle:hover { color: var(--text); background: var(--hover); }
+  .drag { flex: 1; min-width: 12px; }
+  .wc { display: flex; flex: none; }
+  .wc button { all: unset; cursor: default; width: 46px; text-align: center; line-height: 40px; color: var(--muted); font-size: 14px; }
+  .wc button:hover { background: var(--hover); color: var(--text); }
+  .wc button.close:hover { background: #e81123; color: white; }
+  .tabs { flex: 0 1 auto; min-width: 0; display: flex; align-items: stretch; gap: 1px; background: var(--border); overflow-x: auto; scrollbar-width: none; }
   .tab { display: flex; align-items: center; min-width: 0; max-width: 260px; background: var(--bg); color: var(--muted); }
   .tab.on { background: var(--panel); color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
-  .tab-name { all: unset; cursor: default; padding: 5px 4px 5px 12px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .tab-close { all: unset; cursor: default; padding: 0 8px; opacity: 0; font-size: 14px; }
+  .tab-name { all: unset; cursor: default; padding: 0 4px 0 13px; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tab-close { all: unset; cursor: default; padding: 0 9px; opacity: 0; font-size: 15px; }
   .tab:hover .tab-close, .tab.on .tab-close { opacity: 0.7; }
   .tab-close:hover { opacity: 1 !important; color: var(--text); }
-  .tab-new { all: unset; cursor: default; padding: 0 12px; background: var(--bg); color: var(--muted); font-size: 16px; }
+  .tab-new { all: unset; cursor: default; padding: 0 14px; background: var(--bg); color: var(--muted); font-size: 19px; }
   .tab-new:hover { color: var(--text); }
   .start { position: absolute; z-index: 5; inset: 0; overflow-y: auto; padding: 24px 32px; background: var(--bg); }
   .start-hint { color: var(--muted); margin: 0 0 16px; }
@@ -1650,10 +1710,7 @@
   .segmented { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; flex: none; }
   .segmented button { all: unset; padding: 2px 10px; cursor: default; }
   .segmented button + button { border-left: 1px solid var(--border); }
-  .segmented button.on, .toggle.on { background: var(--accent); color: var(--accent-text); }
-  .toggle { padding: 2px 8px; }
+  .segmented button.on { background: var(--accent); color: var(--accent-text); }
   .role { flex: none; font-weight: 600; color: var(--accent); }
   .finish { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
-  .gear { padding: 0 6px; font-size: 14px; background: none; border: none; color: var(--muted); }
-  .gear:hover { color: var(--text); }
 </style>
