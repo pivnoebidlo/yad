@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { addRecent, clearRecent, loadRecent, loadSession, pairTitle, saveSession, type Source } from "./session";
+import { addFavorite, addRecent, clearRecent, loadFavorites, loadRecent, loadSession, pairTitle, removeFavorite, saveSession, type Source } from "./session";
 
 const store = new Map<string, string>();
 beforeEach(() => {
@@ -37,5 +37,18 @@ describe("session and recent comparisons", () => {
     expect(loadRecent()).toHaveLength(20);
     expect(clearRecent()).toEqual([]);
     expect(loadRecent()).toEqual([]);
+  });
+
+  it("keeps favorites named, unique by pair; broken entries are dropped", () => {
+    let fav = addFavorite([], { name: "stage", a: f("/s"), b: f("/p") });
+    fav = addFavorite(fav, { name: "logs", a: f("/l1"), b: f("/l2") });
+    fav = addFavorite(fav, { name: "staging", a: f("/s"), b: f("/p") }); // the same pair: rename
+    expect(fav.map((x) => x.name)).toEqual(["staging", "logs"]);
+    store.set(
+      "yad.favorites",
+      JSON.stringify([{ name: "", a: f("/q"), b: f("/z") }, { name: "x", a: { kind: "bogus", path: "/q" } as never, b: f("/z") }, { name: "ok", a: f("/1"), b: f("/2") }]),
+    );
+    expect(loadFavorites()).toEqual([{ name: "ok", a: f("/1"), b: f("/2") }]);
+    expect(removeFavorite(fav, fav[1]).map((x) => x.name)).toEqual(["staging"]);
   });
 });

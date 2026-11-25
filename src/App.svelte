@@ -18,7 +18,8 @@
   import { t, tn } from "./lib/i18n.svelte";
   import { getVersion } from "@tauri-apps/api/app";
   import {
-    addRecent, clearRecent, loadRecent, loadSession, pairTitle, removeRecent, saveSession, type Recent, type Source as SessionSource,
+    addFavorite, addRecent, clearRecent, loadFavorites, loadRecent, loadSession, pairTitle, removeFavorite, removeRecent, saveSession,
+    type Favorite, type Recent, type Source as SessionSource,
   } from "./lib/session";
   import { findUpdate, installUpdate, type Update } from "./lib/updates";
   import { CONFIG_NAME, applyProjectCompare, applyProjectFormat, parseProjectConfig, type ProjectConfig } from "./lib/projectConfig";
@@ -126,6 +127,7 @@
     const v = mode === "text" ? raw : sem;
     const side = v?.focusedSide();
     if (side) settingsFrom = { v, side };
+    favMenu = null; // the menu does not hang over the dialog
     settingsOpen = true;
   }
   function closeSettings() {
@@ -283,6 +285,64 @@
   /** Remember open tabs for the next start (off when started by git or with paths). */
   let sessionOn = $state(false);
   let recent = $state<Recent[]>(loadRecent());
+  /** Saved comparisons, one click away: the star in the top bar. */
+  let favorites = $state<Favorite[]>(loadFavorites());
+  /** The favorites menu: anchored under the star; null while closed. */
+  let favMenu = $state<{ x: number; y: number } | null>(null);
+  /** The save form is shown instead of the list. */
+  let favForm = $state(false);
+  let favName = $state("");
+  const canFav = $derived(!!sources.a && !!sources.b);
+  const favDefaultName = $derived(canFav ? pairTitle(sources.a, sources.b, "") : "");
+  const favKey = (x: Favorite) => `${x.name}|${x.a.path}|${x.b.path}`;
+
+  /** Open both sides of a saved or recent pair, in a fresh tab when something is already open. */
+  async function openPair(a: SessionSource, b: SessionSource) {
+    if (merge) return;
+    if (sources.a || sources.b) newTab();
+    await openSource("a", a);
+    await openSource("b", b);
+  }
+
+  async function openRecent(r: Recent) {
+    await openPair(r.a, r.b);
+  }
+
+  async function openFavorite(item: Favorite) {
+    favMenu = null;
+    await openPair(item.a, item.b);
+  }
+
+  function saveFavorite() {
+    if (!canFav) return;
+    favorites = addFavorite(favorites, {
+      name: favName.trim() || favDefaultName,
+      a: $state.snapshot(sources.a) as SessionSource,
+      b: $state.snapshot(sources.b) as SessionSource,
+    });
+    favForm = false;
+  }
+
+  /** Escape leaves the save form, the second one closes the menu. */
+  function onFavKey(e: KeyboardEvent) {
+    if (e.key !== "Escape") return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (favForm) favForm = false;
+    else favMenu = null;
+  }
+
+  function openFavMenu(e: MouseEvent) {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    favMenu = { x: r.left, y: r.bottom + 4 };
+    favForm = false;
+  }
+
+  /** Focus and select the save-form field. */
+  const autofocus = (el: HTMLInputElement) => {
+    el.focus();
+    el.select();
+  };
 
   const liveTab = (): TabState => ({ id: tabs[tabIndex].id, sources, entries, current, ops, lastSide, project });
   const tabOf = (i: number) => (i === tabIndex ? liveTab() : tabs[i]);
@@ -344,11 +404,6 @@
     tabIndex = Math.min(i, tabs.length - 1);
     loadTab(tabs[tabIndex]);
     void checkDisk(true);
-  }
-
-  async function openRecent(r: Recent) {
-    if (sources.a || sources.b) newTab();
-    if (await openSource("a", r.a)) await openSource("b", r.b);
   }
 
   /** Reopen the tabs of the last session (missing paths are skipped). */
@@ -1423,6 +1478,13 @@
     <div class="head" data-tauri-drag-region style="width: {headWidth}px">
       <div class="lights-pad" data-tauri-drag-region style="width: {isMac ? 70 : 0}px"></div>
       <div class="head-drag" data-tauri-drag-region></div>
+      {#if sidebar && !merge}
+        <button class="head-star" onclick={openFavMenu} title={t("favorites")}>
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+          </svg>
+        </button>
+      {/if}
       {#if sidebar}
         <button class="head-gear" onclick={openSettings} title={t("settings") + hk("settings")}>
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1564,6 +1626,20 @@
           <div class="start">
             <p class="start-hint">{t("startHint")}</p>
             <p class="start-paste">{t("pasteHint", { key: formatCombo("Mod+V") })}</p>
+            {#if favorites.length}
+              <h3>{t("favorites")}</h3>
+              <ul>
+                {#each favorites as item (favKey(item))}
+                  <li>
+                    <button class="recent" onclick={() => void openFavorite(item)} title={`${item.a.path}\n${item.b.path}`}>
+                      <b>{item.name}</b>
+                      <small>{item.a.path} ↔ {item.b.path}</small>
+                    </button>
+                    <button class="recent-x" onclick={() => (favorites = removeFavorite(favorites, item))} title={t("favRemove")}>×</button>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
             {#if recent.length}
               <h3>{t("recentTitle")}</h3>
               <ul>
@@ -1640,15 +1716,49 @@
   <Settings bind:tab={settingsTab} project={project?.path} onclearrecent={() => (recent = clearRecent())} oncheckupdate={() => checkUpdates(true)} onclose={closeSettings} />
 {/if}
 
+{#if favMenu}
+  <!-- The favorites menu: anchored under the star, closed by a click away. -->
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div class="menu-backdrop" onclick={() => (favMenu = null)}></div>
+  <div class="menu" role="menu" tabindex="-1" aria-label={t("favorites")} style="left: {favMenu.x}px; top: {favMenu.y}px" onkeydown={onFavKey}>
+    {#if favForm}
+      <label class="menu-form">
+        <input bind:value={favName} placeholder={favDefaultName} spellcheck="false" use:autofocus
+          onkeydown={(e) => { if (e.key === "Enter") { e.preventDefault(); saveFavorite(); } }} />
+        <button onclick={saveFavorite} disabled={!canFav}>{t("save")}</button>
+        <button onclick={() => (favForm = false)}>{t("favCancel")}</button>
+      </label>
+    {:else}
+      {#if favorites.length}
+        {#each favorites as item (favKey(item))}
+          <div class="menu-row">
+            <button class="menu-item" onclick={() => void openFavorite(item)} title={`${item.a.path}\n${item.b.path}`}>
+              <b>{item.name}</b>
+              <small>{item.a.path} ↔ {item.b.path}</small>
+            </button>
+            <button class="menu-x" onclick={() => (favorites = removeFavorite(favorites, item))} title={t("favRemove")}>×</button>
+          </div>
+        {/each}
+      {:else}
+        <p class="menu-empty">{t("favEmpty")}</p>
+      {/if}
+      <button class="menu-add" disabled={!canFav} title={canFav ? "" : t("favNeedPair")}
+        onclick={() => { favName = favDefaultName; favForm = true; }}>
+        {t("favAdd")}
+      </button>
+    {/if}
+  </div>
+{/if}
+
 <style>
   main { display: flex; flex-direction: column; height: 100vh; }
   .tabsbar { flex: none; display: flex; align-items: stretch; height: 40px; background: var(--bg); border-bottom: 1px solid var(--border); }
   .head { flex: none; display: flex; align-items: stretch; background: var(--panel); border-right: 1px solid var(--border);
     transition: width .14s ease; overflow: hidden; }
   .head-drag { flex: 1; min-width: 0; }
-  .head-gear, .handle { all: unset; cursor: default; flex: none; width: 40px; display: flex; align-items: center;
+  .head-star, .head-gear, .handle { all: unset; cursor: default; flex: none; width: 40px; display: flex; align-items: center;
     justify-content: center; color: var(--muted); }
-  .head-gear:hover, .handle:hover { color: var(--text); background: var(--hover); }
+  .head-star:hover, .head-gear:hover, .handle:hover { color: var(--text); background: var(--hover); }
   .drag { flex: 1; min-width: 12px; }
   .wc { display: flex; flex: none; }
   .wc button { all: unset; cursor: default; width: 46px; text-align: center; line-height: 40px; color: var(--muted); font-size: 14px; }
@@ -1666,6 +1776,24 @@
   .start { position: absolute; z-index: 5; inset: 0; overflow-y: auto; padding: 24px 32px; background: var(--bg); }
   .start-hint { color: var(--muted); margin: 0 0 16px; }
   .start-paste { margin: 0 0 20px; padding: 8px 12px; border: 1px dashed var(--border); border-radius: 8px; color: var(--muted); max-width: max-content; }
+  .menu-backdrop { position: fixed; inset: 0; z-index: 50; }
+  .menu { position: fixed; z-index: 51; min-width: 280px; max-width: 420px; padding: 4px; background: var(--bg);
+    border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 12px 40px #0005; font-size: 12px; }
+  .menu-row { display: flex; align-items: stretch; }
+  .menu-item { all: unset; cursor: default; flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px;
+    padding: 6px 10px; border-radius: var(--radius); }
+  .menu-item:hover { background: var(--hover); }
+  .menu-item small { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .menu-x { all: unset; cursor: default; padding: 0 10px; opacity: 0; color: var(--muted); }
+  .menu-row:hover .menu-x { opacity: 1; }
+  .menu-x:hover { color: var(--text); }
+  .menu-add { all: unset; cursor: default; display: block; width: 100%; padding: 6px 10px; text-align: left;
+    color: var(--accent); border-radius: var(--radius); }
+  .menu-add:hover:not(:disabled) { background: var(--hover); }
+  .menu-add:disabled { color: var(--muted); }
+  .menu-empty { margin: 8px 10px; color: var(--muted); }
+  .menu-form { display: flex; gap: 4px; }
+  .menu-form input { flex: 1; min-width: 0; }
   .start h3 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
   .start ul { list-style: none; margin: 0; padding: 0; max-width: 900px; }
   .start li { display: flex; align-items: center; border-radius: 6px; }
