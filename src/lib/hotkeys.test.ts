@@ -17,6 +17,8 @@ describe("hotkeys", () => {
     expect(comboOf(ev("KeyS", "ы", { ...mod, shiftKey: true }))).toBe("Mod+Shift+S");
     expect(actionFor("Mod+Shift+S", DEFAULT_HOTKEYS)).toBe("saveAll");
     expect(actionFor("Mod+Alt+ArrowDown", DEFAULT_HOTKEYS)).toBe("nextFile");
+    expect(actionFor("Mod+Shift+F", DEFAULT_HOTKEYS)).toBe("format");
+    expect(actionFor("Mod+Alt+F", DEFAULT_HOTKEYS)).toBe("filter");
     expect(actionFor("Mod+K", DEFAULT_HOTKEYS)).toBeNull();
   });
 

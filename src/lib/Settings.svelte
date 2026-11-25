@@ -23,8 +23,11 @@
 
   const REPO = "https://github.com/pivnoebidlo/yad";
   let version = $state("");
+  let dialog: HTMLDivElement;
   onMount(() => {
     getVersion().then((v) => (version = v)).catch(() => {});
+    // Take the keyboard away from the editor behind the modal, so typing goes nowhere.
+    dialog.focus();
   });
 
   // ---- comparison --------------------------------------------------------
@@ -110,7 +113,7 @@
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 <div class="backdrop" onclick={onclose}>
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-  <div class="dialog" role="dialog" aria-modal="true" aria-label={t("settings")} tabindex="-1" onclick={(e) => e.stopPropagation()}>
+  <div class="dialog" role="dialog" aria-modal="true" aria-label={t("settings")} tabindex="-1" bind:this={dialog} onclick={(e) => e.stopPropagation()}>
     <nav>
       {#each tabs as id}
         <button class:on={tab === id} onclick={() => (tab = id)}>{t(id)}</button>
@@ -206,7 +209,7 @@
   .backdrop { position: fixed; inset: 0; background: #0006; display: flex; align-items: center; justify-content: center; z-index: 100; }
   .dialog { position: relative; width: min(720px, calc(100vw - 32px)); height: min(520px, calc(100vh - 32px)); display: flex;
     background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: calc(var(--radius) * 2); overflow: hidden;
-    box-shadow: 0 20px 60px #0005; }
+    box-shadow: 0 20px 60px #0005; outline: none; }
   :global(:root[data-theme="oldschool"]) .dialog { border: 3px double var(--border); }
   nav { width: 170px; flex: none; display: flex; flex-direction: column; gap: 2px; padding: 12px 8px; background: var(--panel); border-right: 1px solid var(--border); }
   nav button { all: unset; padding: 6px 10px; border-radius: var(--radius); cursor: default; }

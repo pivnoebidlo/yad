@@ -16,6 +16,7 @@
  *     indent: 2              # 2 or 4
  *     indentLists: true      # false: "key:\n- item"
  *     sortKubernetesKeys: true
+ *     expandNestedJson: true # false: JSON stored in string values stays strings (JSON files)
  */
 import { parse } from "yaml";
 import { DEFAULT_IGNORE, parsePath, type CompareOptions, type FormatOptions } from "./semantic";
@@ -68,7 +69,8 @@ export function parseProjectConfig(text: string): { config: ProjectConfig; error
         if (fk === "indent" && (fv === 2 || fv === 4)) f.indent = fv;
         else if (fk === "indentLists" && typeof fv === "boolean") f.indentSeq = fv;
         else if (fk === "sortKubernetesKeys" && typeof fv === "boolean") f.sortKubernetesKeys = fv;
-        else errors.push(`format.${fk}: ${["indent", "indentLists", "sortKubernetesKeys"].includes(fk) ? "invalid value" : "unknown setting"}`);
+        else if (fk === "expandNestedJson" && typeof fv === "boolean") f.expandNestedJson = fv;
+        else errors.push(`format.${fk}: ${["indent", "indentLists", "sortKubernetesKeys", "expandNestedJson"].includes(fk) ? "invalid value" : "unknown setting"}`);
       }
       config.format = f;
     } else errors.push(`${k}: unknown setting`);

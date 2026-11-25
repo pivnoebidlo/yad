@@ -2,7 +2,7 @@
   import { onMount, tick, untrack } from "svelte";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { open, ask, message } from "@tauri-apps/plugin-dialog";
+  import { open, ask, message, save as saveDialog } from "@tauri-apps/plugin-dialog";
   import type { Chunk } from "@codemirror/merge";
   import type { ChangeDesc } from "@codemirror/state";
   import DiffView from "./lib/DiffView.svelte";
@@ -112,6 +112,20 @@
   /** " (⌘S)" for tooltips, following the current bindings. */
   const hk = (a: ActionId) => (settings.hotkeys[a] ? ` (${formatCombo(settings.hotkeys[a])})` : "");
 
+  /** The editor that had focus before Settings opened; it gets the keyboard back on close. */
+  let settingsFrom: { v: DiffView; side: Side } | null = null;
+  function openSettings() {
+    const v = mode === "text" ? raw : sem;
+    const side = v?.focusedSide();
+    if (side) settingsFrom = { v, side };
+    settingsOpen = true;
+  }
+  function closeSettings() {
+    settingsOpen = false;
+    settingsFrom?.v.focus(settingsFrom.side);
+    settingsFrom = null;
+  }
+
   // Comparison settings changed: re-evaluate every file and the current view.
   $effect(() => {
     const o = opts;
@@ -142,12 +156,17 @@
       sem.setDocSoft("b", "");
       return;
     }
+    // A single document: the hidden side mirrors the visible one, so the diff
+    // never paints the whole text as one giant change.
+    const from: Side | null = singleDoc ? (hasA() ? "a" : "b") : null;
+    if (from) raw.setDocSoft(otherSide(from), raw.getDoc(from));
     result = compareTexts(raw.getDoc("a"), raw.getDoc("b"), opts);
     normalized = renderNormalized(result.resources, opts);
     for (const side of ["a", "b"] as const) {
       if (semSide === side) continue; // the user is typing there, or the text does not parse yet
       sem.setDocSoft(side, normalized[side]);
     }
+    if (from) sem.setDocSoft(otherSide(from), sem.getDoc(from));
     e.status = statusOf(e, result, opts);
   }
 
@@ -212,6 +231,11 @@
       sources[other] = null;
       entries = [];
     }
+    // Pasted text (no file behind it) is just as incomparable with a folder.
+    if (shape(src.kind) === "dir" && !sources[other] && entries.some((e) => e[other])) {
+      if (!(await confirmDiscard(other))) return false;
+      entries = [];
+    }
     ops = ops.filter((o) => o.side !== side);
     try {
       if (src.kind === "file") await loadFile(side, path);
@@ -257,6 +281,13 @@
   const tabDirty = (t: TabState) => t.entries.some((e) => isDirty(e.a) || isDirty(e.b));
   const anyTabDirty = () => tabs.some((_, i) => tabDirty(tabOf(i)));
 
+  /** Tab title: the sides' file names, or "Pasted text" when a side has no file yet. */
+  function tabTitle(tb: TabState): string {
+    return tb.sources.a || tb.sources.b
+      ? pairTitle(tb.sources.a, tb.sources.b, t("newTab"))
+      : tb.entries.some((e) => e.a || e.b) ? t("pasted") : t("newTab");
+  }
+
   function loadTab(t: TabState) {
     sources = t.sources;
     entries = t.entries;
@@ -264,6 +295,7 @@
     lastSide = t.lastSide;
     project = t.project;
     semError = null;
+    if (!t.entries.length) (document.activeElement as HTMLElement | null)?.blur?.(); // ⌘V then goes to the left side
     selectEntry(t.entries.length ? Math.max(0, t.current) : -1);
   }
 
@@ -429,12 +461,63 @@
 
   // ---- editing & saving -----------------------------------------------------
 
+  /** An in-memory side: text pasted into an empty tab, not written anywhere yet. */
+  const untitledBuf = (): Buf => ({ path: "", saved: "", text: "", exists: false, eol: "\n", bom: false });
+
+  /** Editor "file name" for pasted text — only decides the syntax highlighting. */
+  const untitledPath = (text: string) => (isJsonText(text) ? "pasted.json" : "pasted.yaml");
+
   function onRawChange(side: Side, text: string) {
-    const e = entries[current];
+    let e = entries[current];
+    // Text typed or pasted into a side with no file of its own (an empty tab):
+    // kept in memory; Save later asks where to write it.
+    if (!e && text.trim() && !dirMode && !merge && !sources[side]) {
+      e = { rel: "", status: "equal" };
+      e[side] = untitledBuf();
+      entries = [e];
+      current = 0;
+      raw.setDoc(side, text, untitledPath(text)); // the text is already there: only the language changes
+    } else if (e && text.trim() && !e[side] && !dirMode && !merge && !sources[side]) {
+      e[side] = untitledBuf();
+      raw.setDoc(side, text, untitledPath(text));
+    }
     if (!e) return;
     storeEditorText(e, side, text, sources[side]?.kind === "dir" ? sources[side]!.path : null);
     if (raw.focusedSide() === side) lastSide = side;
+    // A single document: the hidden side mirrors it at once, so no chunk ever
+    // pretends the whole text is new while the user types.
+    if (singleDoc) raw.setDocSoft(otherSide(side), text);
     schedule();
+  }
+
+  /** Clipboard text becomes one side of the comparison; no file is behind it. */
+  function pasteInto(side: Side, text: string) {
+    if (merge) return;
+    let e = entries[current];
+    if (!e) {
+      e = { rel: "", status: "equal" };
+      entries = [e];
+      current = 0;
+    }
+    if (!e[side]) e[side] = untitledBuf();
+    e[side]!.text = text;
+    void setMode("text"); // the text as pasted; Format pretty-prints it
+    raw.setDoc(side, text, untitledPath(text), true);
+    raw.setReadOnly(side, false);
+    sem.setReadOnly(side, false);
+    recompute();
+  }
+
+  /** Cmd+V with no editor focused: the clipboard text goes to the side of this tab that is still empty. */
+  function onpaste(ev: ClipboardEvent) {
+    if (merge || settingsOpen || dirMode) return;
+    // An editor, a filter field or Settings takes the paste itself.
+    if ((document.activeElement as HTMLElement | null)?.closest?.(".cm-editor, input, textarea, select")) return;
+    const text = ev.clipboardData?.getData("text/plain");
+    if (!text?.trim()) return;
+    ev.preventDefault();
+    const free: Side | null = !hasA() ? "a" : !hasB() ? "b" : null;
+    if (free) pasteInto(free, text);
   }
 
   async function saveBuf(buf: Buf): Promise<boolean> {
@@ -453,11 +536,27 @@
   async function save(side: Side) {
     if (merge && side === "b") return void (await saveMerge());
     const buf = entries[current]?.[side];
-    if (isDirty(buf)) await saveBuf(buf!);
+    if (!isDirty(buf)) return;
+    if (!buf!.path) return void (await saveUntitled(side, buf!));
+    await saveBuf(buf!);
+  }
+
+  /** A side without a file (text pasted into an empty tab): Save asks where to write it. */
+  async function saveUntitled(side: Side, buf: Buf) {
+    const path = await saveDialog({ title: t("saveAsTitle"), filters });
+    if (typeof path !== "string" || !path) return;
+    buf.path = path;
+    if (await saveBuf(buf)) sources[side] = { kind: "file", path }; // now it is a file like any other
   }
 
   async function saveAll() {
-    for (const e of entries) for (const buf of [e.a, e.b]) if (isDirty(buf)) await saveBuf(buf!);
+    for (const e of entries)
+      for (const side of ["a", "b"] as const) {
+        const buf = e[side];
+        if (!isDirty(buf)) continue;
+        if (!buf!.path) await saveUntitled(side, buf!);
+        else await saveBuf(buf!);
+      }
   }
 
   // ---- files changed outside YAD -------------------------------------------
@@ -622,6 +721,7 @@
     }
     if (update && manual) {
       settingsOpen = false;
+      settingsFrom = null; // a native dialog takes over: no editor to return to
       await offerUpdate();
     } else if (manual) await message(t("updateLatest", { v: await getVersion() }), { title: t("updateTitle"), kind: "info" });
   }
@@ -655,6 +755,12 @@
     saved: boolean;
   };
   let merge = $state<MergeSession | null>(null);
+  /** True when nothing is open at all: the start hint and recent comparisons cover the editors. */
+  const startScreen = $derived(!merge && !sources.a && !sources.b && !entries.some((e) => e.a || e.b));
+  const hasA = () => !!sources.a || entries.some((e) => e.a);
+  const hasB = () => !!sources.b || entries.some((e) => e.b);
+  /** One text with nothing to compare: shown alone, full width (paste → pretty). */
+  const singleDoc = $derived(!merge && !dirMode && hasA() !== hasB());
 
   /** `yad --merge BASE LOCAL REMOTE MERGED`: left shows a version, right the result. */
   async function startMerge([base, local, remote, merged]: string[]) {
@@ -854,11 +960,15 @@
     return true;
   }
 
-  async function formatSide(side: Side) {
+  /** Pretty-print one side. `quiet` (the hotkey): "already formatted" becomes a notice, not a dialog. */
+  async function formatSide(side: Side, quiet = false) {
     flushSemantic();
     const r = formatText(raw.getDoc(side), fmtOptions());
     if (r.error !== undefined) return message(r.error, { title: t("cannotFormat"), kind: "warning" });
-    if (!rewriteSide(side, r.text, `✨ ${t("opFormat")}`)) await message(t("alreadyFormatted"), { title: t("format"), kind: "info" });
+    if (!rewriteSide(side, r.text, t("opFormat"))) {
+      if (quiet) showNotice(t("alreadyFormatted"));
+      else await message(t("alreadyFormatted"), { title: t("format"), kind: "info" });
+    }
   }
 
   async function alignSide(side: Side) {
@@ -871,7 +981,7 @@
   /** Format or align every file on one side (directory mode); one History step per file. */
   async function bulk(kind: "format" | "align", side: Side) {
     flushSemantic();
-    const label = kind === "format" ? `✨ ${t("opFormat")}` : `⇅ ${t("opAlign")}`;
+    const label = kind === "format" ? t("opFormat") : `⇅ ${t("opAlign")}`;
     const fo = fmtOptions();
     let changed = 0;
     const skipped: string[] = [];
@@ -1153,7 +1263,7 @@
 
   function run(action: ActionId) {
     switch (action) {
-      case "settings": settingsOpen = true; break;
+      case "settings": openSettings(); break;
       case "save": {
         const side = (mode === "text" ? raw : sem).focusedSide();
         flushSemantic();
@@ -1176,6 +1286,15 @@
         }
         break;
       case "toggleSidebar": sidebar = !sidebar; break;
+      case "format": {
+        // Like Save: the focused side, else the last edited one, else every side with text.
+        const e = entries[current];
+        const side = (mode === "text" ? raw : sem).focusedSide() ?? lastSide;
+        if (side) {
+          if (e?.[side] && !e[side]!.readonly) formatSide(side, true);
+        } else for (const s of ["a", "b"] as const) if (e?.[s] && !e[s]!.readonly) formatSide(s, true);
+        break;
+      }
       case "newTab": newTab(); break;
       case "closeTab": void closeTab(); break;
       case "nextTab": switchTab((tabIndex + 1) % tabs.length); break;
@@ -1283,9 +1402,10 @@
   });
 </script>
 
-<svelte:window onkeydowncapture={onhotkey} onkeydown={onkey} />
+<svelte:window onkeydowncapture={onhotkey} onkeydown={onkey} onpaste={onpaste} />
 
-<main>
+<!-- While Settings is open, the app behind the modal keeps neither focus nor clicks. -->
+<main inert={settingsOpen}>
   {#if !merge}
     <nav class="tabs" aria-label={t("tabs")}>
       {#each tabs as tb, i (tb.id)}
@@ -1294,7 +1414,7 @@
           onmousedown={(e) => { if (e.button === 1) { e.preventDefault(); void closeTab(i); } }}>
           <button class="tab-name" onclick={() => switchTab(i)}
             title={[live.sources.a?.path, live.sources.b?.path].filter(Boolean).join("\n") || t("newTab")}>
-            {pairTitle(live.sources.a, live.sources.b, t("newTab"))}{tabDirty(live) ? " ✎" : ""}
+            {tabTitle(live)}{tabDirty(live) ? " ✎" : ""}
           </button>
           <button class="tab-close" onclick={() => closeTab(i)} title={t("closeTab") + hk("closeTab")}>×</button>
         </div>
@@ -1360,8 +1480,11 @@
               <button onclick={() => pick(side, true)} title={side === "a" ? t("openFolderLeft") + hk("openFolderLeft") : t("openFolderRight") + hk("openFolderRight")}>{t("openFolder")}</button>
             </div>
             {/if}
-            <span class="path" title={src?.kind === "render" ? `${renderLabel(src)}\n${src.path}` : buf?.path ?? src?.path ?? ""}>
-              {#if !src}
+            <span class="path" title={!src && buf ? t("pastedTitle") : src?.kind === "render" ? `${renderLabel(src)}\n${src.path}` : buf?.path ?? src?.path ?? ""}>
+              {#if !src && buf}
+                <b>{t("pasted")}{isDirty(buf) ? " ✎" : ""}</b>
+                <small>{t("pastedHint")}</small>
+              {:else if !src}
                 <i>{t("dropHere")}</i>
               {:else if dirMode}
                 <b>{entry ? entry.rel : "—"}{isDirty(buf) ? " ✎" : ""}{entry && !buf ? ` ${t("missing")}` : ""}</b>
@@ -1378,7 +1501,7 @@
             {#if src?.kind === "render"}
               <button onclick={() => rerender(side)} title={t("rerender")}>↻</button>
             {/if}
-            <button onclick={() => formatSide(side)} disabled={!buf || buf.readonly} title={t("formatTitle")}>{t("format")}</button>
+            <button onclick={() => formatSide(side)} disabled={!buf || buf.readonly} title={t("formatTitle") + hk("format")}>{t("format")}</button>
             <button onclick={() => alignSide(side)} disabled={!buf || buf.readonly || !entry?.[otherSide(side)]}
               title={side === "a" ? t("alignTitleRight") : t("alignTitleLeft")}>{t("align")}</button>
             <button onclick={() => save(side)} disabled={!isDirty(buf)} title={t("saveTitle") + hk("save")}>{t("save")}</button>
@@ -1387,9 +1510,10 @@
       </header>
 
       <div class="views">
-        {#if !merge && !sources.a && !sources.b}
+        {#if startScreen}
           <div class="start">
             <p class="start-hint">{t("startHint")}</p>
+            <p class="start-paste">{t("pasteHint", { key: formatCombo("Mod+V") })}</p>
             {#if recent.length}
               <h3>{t("recentTitle")}</h3>
               <ul>
@@ -1407,11 +1531,11 @@
           </div>
         {/if}
         <div class="view" class:hidden={mode !== "text"}>
-          <DiffView bind:this={raw} {theme} {collapse} onarrow={onTextArrow} onchange={onRawChange} ontx={onRawTx}
+          <DiffView bind:this={raw} {theme} {collapse} single={singleDoc} onarrow={onTextArrow} onchange={onRawChange} ontx={onRawTx}
             onchunks={(n) => (chunks = n)} markers={rawMarkers} {onmarker} />
         </div>
         <div class="view" class:hidden={mode !== "semantic"}>
-          <DiffView bind:this={sem} {theme} {collapse} onarrow={onSemanticArrow} subArrows={semSubArrows} onuseredit={onSemanticUserEdit}
+          <DiffView bind:this={sem} {theme} {collapse} single={singleDoc} onarrow={onSemanticArrow} subArrows={semSubArrows} onuseredit={onSemanticUserEdit}
             markers={semMarkers} {onmarker} />
         </div>
       </div>
@@ -1424,7 +1548,9 @@
       <button class:on={mode === "semantic"} onclick={() => setMode("semantic")} title={t("semanticTitle") + hk("modeSemantic")}>{t("semantic")}</button>
       <button class:on={mode === "text"} onclick={() => setMode("text")} title={t("sourceTitle") + hk("modeSource")}>{t("source")}</button>
     </div>
-    {#if mode === "text"}
+    {#if singleDoc}
+      <span class="hint">{t("docHint")}</span>
+    {:else if mode === "text"}
       <span>{tn("differences", chunks)}</span>
     {:else}
       <span>{t("resourcesDiffer", { n: changedCount, total: result?.resources.length ?? 0 })}</span>
@@ -1458,12 +1584,12 @@
       <button onclick={saveAll} disabled={!anyDirty()} title={t("saveAllTitle") + hk("saveAll")}>{t("saveAll")}</button>
     {/if}
     <label><input type="checkbox" bind:checked={collapse} /> {t("collapseUnchanged")}</label>
-    <button class="gear" onclick={() => (settingsOpen = true)} title={t("settings") + hk("settings")}>⚙</button>
+    <button class="gear" onclick={openSettings} title={t("settings") + hk("settings")}>⚙</button>
   </footer>
 </main>
 
 {#if settingsOpen}
-  <Settings bind:tab={settingsTab} project={project?.path} onclearrecent={() => (recent = clearRecent())} oncheckupdate={() => checkUpdates(true)} onclose={() => (settingsOpen = false)} />
+  <Settings bind:tab={settingsTab} project={project?.path} onclearrecent={() => (recent = clearRecent())} oncheckupdate={() => checkUpdates(true)} onclose={closeSettings} />
 {/if}
 
 <style>
@@ -1479,6 +1605,7 @@
   .tab-new:hover { color: var(--text); }
   .start { position: absolute; z-index: 5; inset: 0; overflow-y: auto; padding: 24px 32px; background: var(--bg); }
   .start-hint { color: var(--muted); margin: 0 0 16px; }
+  .start-paste { margin: 0 0 20px; padding: 8px 12px; border: 1px dashed var(--border); border-radius: 8px; color: var(--muted); max-width: max-content; }
   .start h3 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
   .start ul { list-style: none; margin: 0; padding: 0; max-width: 900px; }
   .start li { display: flex; align-items: center; border-radius: 6px; }

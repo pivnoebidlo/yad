@@ -127,6 +127,21 @@ unsaved edits are not kept) — not when started by git or with paths to
 compare. An empty tab lists recent comparisons. Both can be turned off or
 cleared in Settings → General.
 
+## Pasting without files
+
+Plain text can be opened with no files behind it: press ⌘V (Ctrl+V) outside
+the editors and the clipboard text appears in the current tab. With nothing
+to compare, it is shown alone, full width — a document to work on:
+*Format* (⇧⌘F) pretty-prints JSON, turning string values that hold JSON
+(`"request": "{\"obj\":…}"` in a log line) into real nested values, and
+*Save* asks where to write the text. Paste again (or open a file on the
+other side) and the tab becomes a normal comparison. A file opened alone is
+shown the same full-width way until the second side appears.
+
+`yad-cli format` does the same for JSON files — `--no-expand-json` keeps
+embedded JSON as strings, and `format.expandNestedJson: false` in `.yad.yaml`
+sets it for a project.
+
 ## Settings
 
 ⌘, (or the gear in the bottom bar): language (English / Русский), theme,
@@ -155,6 +170,7 @@ format:
   indent: 2              # 2 or 4
   indentLists: true      # false: "key:\n- item"
   sortKubernetesKeys: true
+  expandNestedJson: true  # false: JSON stored in string values stays strings (JSON files)
 ```
 
 `yad-cli` fails (exit 2) on a mistake in `.yad.yaml`; `--no-config` skips the
@@ -172,7 +188,8 @@ file, and explicit flags win over it.
 | ⌘T / ⌘W | New tab / close tab |
 | ⇧⌘] / ⇧⌘[ | Next / previous tab |
 | ⌘B | Toggle side panel |
-| ⇧⌘F | Filter files (folder mode), press again — filter changes |
+| ⇧⌘F | Format the focused side (or both when none is focused) |
+| ⇧⌥⌘F | Filter files (folder mode), press again — filter changes |
 | ⌘, | Settings |
 | ⌥↓ / ⌥↑ | Next / previous difference |
 | ⌘F | Search |

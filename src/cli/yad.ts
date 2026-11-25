@@ -57,6 +57,7 @@ format options:
   --indent 2|4                  spaces per level (default: 2)
   --flush-lists                 "key:\\n- item" instead of "key:\\n  - item"
   --no-sort-k8s                 keep Kubernetes keys in their order
+  --no-expand-json              keep JSON stored in string values as strings
 
 merge options:
   -o, --out <file>              write the result there (default: standard output)
@@ -103,7 +104,7 @@ function parseArgs(args: string[]): Flags {
 const KNOWN = {
   diff: ["--output", "--ignore", "--no-default-ignore", "--strict-empty", "--no-cross-namespace", "--no-pair-renamed", "--order-matters", "--show-secrets", "--no-config", "-q", "--quiet"],
   merge: ["-o", "--out", "--prefer", "--show-secrets", "--no-config", "-q", "--quiet"],
-  format: ["--no-config", "--write", "--indent", "--flush-lists", "--no-sort-k8s", "-q", "--quiet"],
+  format: ["--no-config", "--write", "--indent", "--flush-lists", "--no-sort-k8s", "--no-expand-json", "-q", "--quiet"],
 };
 
 function checkKnown(f: Flags, known: string[]) {
@@ -356,6 +357,7 @@ function cmdFormat(f: Flags, io: Io): number {
   if (![2, 4].includes(opts.indent)) throw new Error("--indent must be 2 or 4");
   if (f.opts.has("--flush-lists")) opts.indentSeq = false;
   if (f.opts.has("--no-sort-k8s")) opts.sortKubernetesKeys = false;
+  if (f.opts.has("--no-expand-json")) opts.expandNestedJson = false;
   const write = f.opts.has("--write");
   const quiet = f.opts.has("-q") || f.opts.has("--quiet");
 

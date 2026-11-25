@@ -122,6 +122,22 @@ describe("formatText", () => {
     expect(plain).toBe('{\n  "b": 1,\n  "a": [\n    1,\n    2\n  ]\n}\n');
   });
 
+  it("pretty-prints a log line, expanding JSON embedded in string values", () => {
+    const line = JSON.stringify({ code: 403, request: "{\"obj\":{\"PhoneChange\":false}}", request_headers: "[\"gzip\"]" });
+    const r = formatText(line);
+    expect(r.error).toBeUndefined();
+    expect(r.text).toBe(
+      JSON.stringify({ code: 403, request: { obj: { PhoneChange: false } }, request_headers: ["gzip"] }, null, 2) + "\n",
+    );
+    // Idempotent: nothing left to expand.
+    expect(formatText(r.text!).text).toBe(r.text);
+
+    const off = formatText(line, { indent: 2, indentSeq: true, sortKubernetesKeys: true, expandNestedJson: false });
+    expect(off.text).toBe(
+      JSON.stringify({ code: 403, request: "{\"obj\":{\"PhoneChange\":false}}", request_headers: "[\"gzip\"]" }, null, 2) + "\n",
+    );
+  });
+
   it("can keep the original key order and the other sequence style", () => {
     const out = formatText("kind: Pod\napiVersion: v1\nmetadata: {name: p}\nspec:\n  containers:\n  - name: a\n", {
       indent: 2, indentSeq: false, sortKubernetesKeys: false,

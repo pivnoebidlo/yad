@@ -5,11 +5,11 @@ import { DEFAULT_IGNORE, defaultFormatOptions, defaultOptions } from "./semantic
 describe(".yad.yaml", () => {
   it("parses settings and reports mistakes without dropping the valid parts", () => {
     const { config, errors } = parseProjectConfig(
-      "ignore:\n  - metadata.labels.team\n  - 'a..b'\ncrossNamespace: false\nformat:\n  indent: 4\n  indentLists: false\n  colour: red\nbogus: 1\ndecodeSecrets: maybe\n",
+      "ignore:\n  - metadata.labels.team\n  - 'a..b'\ncrossNamespace: false\nformat:\n  indent: 4\n  indentLists: false\n  expandNestedJson: false\n  colour: red\nbogus: 1\ndecodeSecrets: maybe\n",
     );
     expect(config.ignore).toEqual([["metadata", "labels", "team"]]);
     expect(config.crossNamespace).toBe(false);
-    expect(config.format).toEqual({ indent: 4, indentSeq: false });
+    expect(config.format).toEqual({ indent: 4, indentSeq: false, expandNestedJson: false });
     expect(errors).toEqual([
       'ignore: invalid path "a..b"',
       "format.colour: unknown setting",
